@@ -1,0 +1,10 @@
+maubot: 0.1.0
+id: org.jobmachine.gifme
+version: 0.0.1
+modules:
+  - gifme
+main_class: GifMe
+extra_files:
+  - base-config.yaml
+database: true  
+database_type: asyncpg

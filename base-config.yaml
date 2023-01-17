@@ -1,0 +1,13 @@
+allow_fallback: true
+
+force_fallback: false
+
+giphy_api_key: ""
+
+allow_non_files: true
+
+restrict_users: false
+
+allowed_users:
+  - "@user1:server.tld"
+  - "@user2:server.tld"
