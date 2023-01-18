@@ -1,5 +1,7 @@
 # gifme
 
+NOTE: THIS IS NOT FULLY FUNCTIONAL. do not expect these things to actually work yet.
+
 a maubot plugin that saves gifs, memes, or optionally anything else someone has posted, associate tags with it, and then
 return it when those tags are called. written because frankly, giphy has gone downhill and a private collection is more
 reliable when it comes to a community's expectations of what the reaction should be.
