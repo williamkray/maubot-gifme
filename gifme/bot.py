@@ -7,8 +7,9 @@ import random
 import urllib.parse
 
 from mautrix.client import Client
-from mautrix.types import (Event, StateEvent, EventID, UserID, FileInfo, EventType, RoomID,
-                            MediaMessageEventContent, ReactionEvent, RedactionEvent, ImageInfo)
+from mautrix.types import (Event, MessageType, EventID, UserID, FileInfo, EventType, RoomID,
+                            MediaMessageEventContent, TextMessageEventContent, ContentURI,
+                            ReactionEvent, RedactionEvent, ImageInfo)
 from mautrix.util.config import BaseProxyConfig, ConfigUpdateHelper
 from maubot import Plugin, MessageEvent
 from maubot.handlers import command, event
@@ -92,6 +93,12 @@ class GifMe(Plugin):
 
     @command.argument("tags", pass_raw=True, required=True)
     async def gifme(self, evt: MessageEvent, tags: str) -> None:
+        if tags == "help":
+            await evt.respond("<code>!gifme \<phrase\></code>: return a gif matching \<phrase\><br />\
+                        <code>!gifme giphy <phrase></code>: return a gif from giphy search matching \<phrase\>",
+                        allow_html=True)
+            return None
+
         if not tags:
             tags = "random"
         img_info = {}
@@ -127,7 +134,46 @@ class GifMe(Plugin):
     @gifme.subcommand("save", help="save and tag a message to the database")
     async def save(self, evt: MessageEvent) -> None:
         await evt.mark_read()
-        await evt.respond("this doesn't work yet.")
+
+        if self.config["restrict_users"]:
+            if evt.sender in self.config["allowed_users"]:
+                pass
+            else:
+                await evt.respond("you're not allowed to do that.")
+                return None
+
+        if not evt.content.get_reply_to():
+            await evt.reply("use this command in a reply to another message so i know what to save")
+            return None
+
+        message_info = {}
+
+        ## fetch our replied-to event contents
+        reply_event = await self.client.get_event(evt.room_id, evt.content.get_reply_to())
+        if reply_event.content.msgtype == MessageType.IMAGE:
+            message_info["mxc_uri"] = reply_event.content.url
+            message_info["mimetype"] = reply_event.content.info.mimetype
+            message_info["height"] = reply_event.content.info.height
+            message_info["width"] = reply_event.content.info.width
+
+        elif reply_event.content.msgtype == MessageType.TEXT:
+            if self.config["allow_non_files"] == False:
+                await evt.respond("i'm not allowed to save anything that isn't a file upload")
+                return None
+            else:
+                message_info["body"] = reply_event.content.body
+                message_info["sender"] = reply_event.sender
+
+        elif reply_event.content.msgtype == MessageType.NOTICE:
+            await evt.reply("i'm not going to save that, it looks like it's from a bot.")
+            return None
+
+        else:
+            await evt.respond(f"i don't know what {reply_event.content.msgtype} is, but i can't save it.")
+            return None
+
+        ## debug 2
+        await evt.respond(f"debug 2: <code>{message_info}</code>", allow_html=True)
 
 
 
