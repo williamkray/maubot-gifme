@@ -16,26 +16,26 @@ commands to generate and upload a package to your maubot server.
 `!gifme <phrase>` will make the bot respond with a randomly selected gif that matches that phrase. optionally, if no
 entries have been stored for that phrase, will fall back to posting something from a giphy search.
 
+`!gifme giphy <phrase>` will skip looking up internally and just go right to returning a result from giphy. this enables
+you to force fallback without needing to set the plugin to do so all the time.
+
 `!gifme save <phrase>` should be used in reply to a message in order to save it to the database and tag it with the
-phrase given. use double-quotes to ensure multi-word phrases are tied together, for example:
-    
-    !gifme save that is actually hilarious
+phrase or words given. tags are stored as text entries in the sqlite database, and returned with full-text search
+queries so no need to get too crazy about quotes or separation. _NOTE: if the image is already stored in the database
+the command will update the tags for the existing image, minus any duplicate words. This effectively enables you to add
+more tags to an entry._
 
-would save and tag the image with the tags `that`, `is`, `actually`, and `hilarious`, whereas
-
-    !gifme save "that is actually hilarious"
-
-would save and tag the image with the tag `that is actually hilarious`
-
+`!gifme tags` should be used in a reply to a message sent by the bot to show all tags associated with the image.
 
 ## config
 
 `allow_fallback`: enables the ability for gifme to return a result from giphy if no suitable option is found internally.
 requires that a giphy api key is added, otherwise fallback will return an error. set to either `true` or `false`
 
-`force_fallback`: skips looking up internal images entirely. useful if you don't have much in your database yet and
-you're trying to build up a collection. requires that a giphy api key is added, otherwise fallback will return an error.
-set to either `true` or `false`.
+`fallback_threshold`: the number of results that need to be returned from the internal database before falling back to a
+giphy search. for example, if set to `2`, there must be at least two entries in the internal database returned, and if
+there are not the bot will search giphy. set to `0` to force fallback at all times and effectively make the bot function
+purely as a giphy bot.
 
 `giphy_api_key`: an api key to authenticate against the giphy api endpoint. optional, only used for fallback behavior.
 

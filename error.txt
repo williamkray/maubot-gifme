@@ -1,0 +1,36 @@
+client/@audry2:jobmachine.orgFailed to run handler
+12:15:23ERRORclient/@audry2:jobmachine.orgTraceback (most recent call last):
+  File "/usr/lib/python3.9/site-packages/mautrix/util/async_db/connection.py", line 81, in execute
+    return await self.wrapped.execute(query, *args, timeout=timeout)
+  File "/usr/lib/python3.9/site-packages/mautrix/util/async_db/aiosqlite.py", line 53, in execute
+    return await self.__execute(query, *args)
+  File "/usr/lib/python3.9/site-packages/aiosqlite/core.py", line 184, in execute
+    cursor = await self._execute(self._conn.execute, sql, parameters)
+  File "/usr/lib/python3.9/site-packages/aiosqlite/core.py", line 129, in _execute
+    return await future
+  File "/usr/lib/python3.9/site-packages/aiosqlite/core.py", line 102, in run
+    result = function()
+sqlite3.OperationalError: near "(": syntax error
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/usr/lib/python3.9/site-packages/mautrix/client/syncer.py", line 235, in _catch_errors
+    await handler(data)
+  File "/opt/maubot/maubot/handlers/command.py", line 133, in __call__
+    ok, res = await self.__call_subcommand__(evt, call_args, remaining_val)
+  File "/opt/maubot/maubot/handlers/command.py", line 162, in __call_subcommand__
+    return True, await subcommand(
+  File "/opt/maubot/maubot/handlers/command.py", line 153, in __call__
+    return await self.__mb_func__(self.__bound_instance__, evt, **call_args)
+  File "/data/plugins/org.jobmachine.gifme-v0.0.1-ts1674159300211.mbp/gifme/bot.py", line 230, in save
+    await self.update_tags(' '.join(newtags), rowid)
+  File "/data/plugins/org.jobmachine.gifme-v0.0.1-ts1674159300211.mbp/gifme/bot.py", line 93, in update_tags
+    await self.database.execute(dbq, rowid, tags)
+  File "/usr/lib/python3.9/site-packages/mautrix/util/async_db/database.py", line 136, in execute
+    return await conn.execute(query, *args, timeout=timeout)
+  File "/usr/lib/python3.9/site-packages/mautrix/util/async_db/connection.py", line 38, in wrapper
+    ret = await func(self, arg, *args, **kwargs)
+  File "/usr/lib/python3.9/site-packages/mautrix/util/async_db/connection.py", line 83, in execute
+    await self._handle_exception(e)
+TypeError: handle_exception_noop() takes 0 positional arguments but 1 was given

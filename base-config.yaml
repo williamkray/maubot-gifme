@@ -1,6 +1,6 @@
 allow_fallback: true
 
-force_fallback: false
+fallback_threshold: 3
 
 giphy_api_key: ""
 
