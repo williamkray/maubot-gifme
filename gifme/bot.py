@@ -22,6 +22,7 @@ from .db import upgrade_table
 
 class Config(BaseProxyConfig):
     def do_update(self, helper: ConfigUpdateHelper) -> None:
+        helper.copy("command_prefix")
         helper.copy("allow_fallback")
         helper.copy("fallback_threshold")
         helper.copy("giphy_api_key")
@@ -33,8 +34,10 @@ class Config(BaseProxyConfig):
 class GifMe(Plugin):
 
     async def start(self) -> None:
-        await super().start()
         self.config.load_and_update()
+
+    def get_command_name(self) -> str:
+        return self.config["command_prefix"]
 
     def sanistring(self, query: str) -> str:
         sani = re.sub(r'[^a-zA-Z0-9\s]', '', query).lower()
@@ -133,7 +136,7 @@ class GifMe(Plugin):
                                 </blockquote>", 
                                 allow_html=True) 
 
-    @command.new(name="gifme", help="save and tag, or return, message contents", require_subcommand=False,
+    @command.new(name=get_command_name, help="save and tag, or return, message contents", require_subcommand=False,
                  arg_fallthrough=False)
 
     @command.argument("tags", pass_raw=True, required=True)
@@ -141,8 +144,13 @@ class GifMe(Plugin):
         tags = self.sanistring(tags)
 
         if not tags:
-            await evt.respond("<code>!gifme \<phrase\></code>: return a gif matching \<phrase\><br />\
-                        <code>!gifme giphy <phrase></code>: return a gif from giphy search matching \<phrase\>",
+            await evt.respond(f"<code>!{self.config['command_prefix']} \<phrase\></code>: return a gif matching \<phrase\><br />\
+                        <code>!{self.config['command_prefix']} giphy \<phrase\></code>: return a gif from giphy search matching\
+                        \<phrase\><br />\
+                        <code>!{self.config['command_prefix']} save \<phrase\></code>: use in reply to a message to save\
+                        the message contents with \<phrase\> as tags, or update the existing tags<br />\
+                        <code>!{self.config['command_prefix']} tags</code>: use in reply to a message i sent\
+                        to see the tags associated with that message in the database",
                         allow_html=True)
             return None
 

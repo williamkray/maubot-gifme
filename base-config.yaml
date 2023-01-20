@@ -1,3 +1,5 @@
+command_prefix: gifme
+
 allow_fallback: true
 
 fallback_threshold: 3

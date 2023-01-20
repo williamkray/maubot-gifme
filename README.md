@@ -1,6 +1,6 @@
 # gifme
 
-NOTE: THIS IS NOT FULLY FUNCTIONAL. do not expect these things to actually work yet.
+NOTE: this bot has only been tested, and is assumed to only work, using SQLite as the plugin database.
 
 a maubot plugin that saves gifs, memes, or optionally anything else someone has posted, associate tags with it, and then
 return it when those tags are called. written because frankly, giphy has gone downhill and a private collection is more
@@ -29,6 +29,8 @@ more tags to an entry._
 
 ## config
 
+`command_prefix`: the command to use for this module. defaults to `gifme`. 
+
 `allow_fallback`: enables the ability for gifme to return a result from giphy if no suitable option is found internally.
 requires that a giphy api key is added, otherwise fallback will return an error. set to either `true` or `false`
 
@@ -43,7 +45,8 @@ purely as a giphy bot.
 the bot to function as a message bookmark system, which may be useful in scenarios where the same message is regularly
 posted and you want a shortcut to it, you want to return someone's message out-of-context for comedic purposes, etc.
 this will return the message as quoted text, with the original sender's matrix ID and the date as the source. set to
-either `true` or `false`.
+either `true` or `false`. *WARNING! this will store the content of the message as plain-text in the database, as well as
+the sender of that message, even for messages sent in encrypted rooms. DO NOT ENABLE THIS IF YOU ARE CONCERNED ABOUT PRIVACY.*
 
 `restrict_users`: whether to restrict tagging and storing permissions to a list of users. set to either `true` or
 `false`.
