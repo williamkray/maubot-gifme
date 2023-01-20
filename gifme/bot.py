@@ -50,7 +50,7 @@ class GifMe(Plugin):
         api_data = None
         info = {}
         imgdata = None
-        url_params = urllib.parse.urlencode({"q": query, "api_key": self.config["giphy_api_key"], "limit": 5})
+        url_params = urllib.parse.urlencode({"q": query, "api_key": self.config["giphy_api_key"], "limit": 10})
 
         ## first we get a json response from giphy with our query parameters
         async with self.http.get(
@@ -212,6 +212,11 @@ class GifMe(Plugin):
 
         if not evt.content.get_reply_to():
             await evt.reply("use this command in a reply to another message so i know what to save")
+            return None
+
+        tags = self.sanistring(tags)
+        if not tags:
+            await evt.respond("you need to supply at least one tag so you can reference it later")
             return None
 
         message_info = {}
