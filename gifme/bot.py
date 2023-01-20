@@ -148,13 +148,14 @@ class GifMe(Plugin):
         tags = self.sanistring(tags)
 
         if not tags:
-            await evt.respond(f"<code>!{self.config['command_prefix']} \<phrase\></code>: return a gif matching \<phrase\><br />\
+            await evt.respond(f"<b>Usage:</b>\
+                        <p><code>!{self.config['command_prefix']} \<phrase\></code>: return a gif matching \<phrase\><br />\
                         <code>!{self.config['command_prefix']} giphy \<phrase\></code>: return a gif from giphy search matching\
                         \<phrase\><br />\
                         <code>!{self.config['command_prefix']} save \<phrase\></code>: use in reply to a message to save\
                         the message contents with \<phrase\> as tags, or update the existing tags<br />\
                         <code>!{self.config['command_prefix']} tags</code>: use in reply to a message i sent\
-                        to see the tags associated with that message in the database",
+                        to see the tags associated with that message in the database</p>",
                         allow_html=True)
             return None
 
