@@ -1,14 +1,20 @@
 command_prefix: gifme
-command_aliases: []
+## aliases must include your primary command prefix as well
+command_aliases: [gifme]
 
+## enable fallback to giphy search? must have a giphy api key defined below
 allow_fallback: true
 
+## minimum number of database entries required to prevent falling back to giphy search,
+## if fallback is enabled
 fallback_threshold: 3
 
 giphy_api_key: ""
 
+## allow saving messages in plain-text to the database? security risk for encrypted rooms!
 allow_non_files: true
 
+## define a list of users who can save messages to the database?
 restrict_users: false
 
 allowed_users:
