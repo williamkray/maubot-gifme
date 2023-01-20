@@ -1,6 +1,6 @@
 maubot: 0.1.0
 id: org.jobmachine.gifme
-version: 0.0.3
+version: 0.0.4
 modules:
   - gifme
 main_class: GifMe

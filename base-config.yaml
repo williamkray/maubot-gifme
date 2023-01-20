@@ -1,4 +1,5 @@
 command_prefix: gifme
+command_aliases: []
 
 allow_fallback: true
 

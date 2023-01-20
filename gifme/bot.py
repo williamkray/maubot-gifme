@@ -23,6 +23,7 @@ from .db import upgrade_table
 class Config(BaseProxyConfig):
     def do_update(self, helper: ConfigUpdateHelper) -> None:
         helper.copy("command_prefix")
+        helper.copy("command_aliases")
         helper.copy("allow_fallback")
         helper.copy("fallback_threshold")
         helper.copy("giphy_api_key")
@@ -38,6 +39,9 @@ class GifMe(Plugin):
 
     def get_command_name(self) -> str:
         return self.config["command_prefix"]
+
+    def is_alias(self, command: str) -> bool:
+        return command in self.config["command_aliases"]
 
     def sanistring(self, query: str) -> str:
         sani = re.sub(r'[^a-zA-Z0-9\s]', '', query).lower()
@@ -136,7 +140,7 @@ class GifMe(Plugin):
                                 </blockquote>", 
                                 allow_html=True) 
 
-    @command.new(name=get_command_name, help="save and tag, or return, message contents", require_subcommand=False,
+    @command.new(name=get_command_name, aliases=is_alias, help="save and tag, or return, message contents", require_subcommand=False,
                  arg_fallthrough=False)
 
     @command.argument("tags", pass_raw=True, required=True)
