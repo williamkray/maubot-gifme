@@ -1,6 +1,7 @@
-command_prefix: gifme
-## aliases must include your primary command prefix as well
-command_aliases: [gifme]
+## aliases for the command. your first one is the primary command prefix, used in help messages.
+## you may want to add more to act as a drop-in replacement for other `giphy` bots
+command_aliases: 
+  - gifme
 
 ## enable fallback to giphy search? must have a giphy api key defined below
 allow_fallback: true

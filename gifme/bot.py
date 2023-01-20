@@ -22,7 +22,6 @@ from .db import upgrade_table
 
 class Config(BaseProxyConfig):
     def do_update(self, helper: ConfigUpdateHelper) -> None:
-        helper.copy("command_prefix")
         helper.copy("command_aliases")
         helper.copy("allow_fallback")
         helper.copy("fallback_threshold")
@@ -38,7 +37,7 @@ class GifMe(Plugin):
         self.config.load_and_update()
 
     def get_command_name(self) -> str:
-        return self.config["command_prefix"]
+        return self.config["command_aliases"][0]
 
     def is_alias(self, command: str) -> bool:
         return command in self.config["command_aliases"]
@@ -149,12 +148,12 @@ class GifMe(Plugin):
 
         if not tags:
             await evt.respond(f"<b>Usage:</b>\
-                        <p><code>!{self.config['command_prefix']} \<phrase\></code>: return a gif matching \<phrase\><br />\
-                        <code>!{self.config['command_prefix']} giphy \<phrase\></code>: return a gif from giphy search matching\
+                        <p><code>!{self.config['command_aliases'][0]} \<phrase\></code>: return a gif matching \<phrase\><br />\
+                        <code>!{self.config['command_aliases'][0]} giphy \<phrase\></code>: return a gif from giphy search matching\
                         \<phrase\><br />\
-                        <code>!{self.config['command_prefix']} save \<phrase\></code>: use in reply to a message to save\
+                        <code>!{self.config['command_aliases'][0]} save \<phrase\></code>: use in reply to a message to save\
                         the message contents with \<phrase\> as tags, or update the existing tags<br />\
-                        <code>!{self.config['command_prefix']} tags</code>: use in reply to a message i sent\
+                        <code>!{self.config['command_aliases'][0]} tags</code>: use in reply to a message i sent\
                         to see the tags associated with that message in the database</p>",
                         allow_html=True)
             return None

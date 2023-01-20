@@ -29,11 +29,9 @@ more tags to an entry._
 
 ## config
 
-`command_prefix`: the command to use for this module. defaults to `gifme`. 
-
-`command_aliases`: a list of aliases the command should also respond to. useful if you want it to act as a drop-in
-replacement for a different command that people are already used to, like `giphy`. be sure to include your primary
-command in this list!
+`command_aliases`: a list of aliases the command should respond to. the first entry will be used as the default command,
+but all commands will elicit a bot response. may be useful if you want it to act as a drop-in replacement for a
+different command that people are already used to, like `giphy`.
 
 `allow_fallback`: enables the ability for gifme to return a result from giphy if no suitable option is found internally.
 requires that a giphy api key is added, otherwise fallback will return an error. set to either `true` or `false`
