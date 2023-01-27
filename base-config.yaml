@@ -2,13 +2,14 @@
 ## you may want to add more to act as a drop-in replacement for other `giphy` bots
 command_aliases: 
   - gifme
+  - gif
 
 ## enable fallback to giphy search? must have a giphy api key defined below
 allow_fallback: true
 
 ## minimum number of database entries required to prevent falling back to giphy search,
 ## if fallback is enabled
-fallback_threshold: 3
+fallback_threshold: 1
 
 giphy_api_key: ""
 

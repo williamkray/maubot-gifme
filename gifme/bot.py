@@ -123,6 +123,10 @@ class GifMe(Plugin):
         row = await self.database.fetchrow(dbq, original)
         return row
 
+    def parse_original(self, body: str):
+        orig = re.search(r'mxorig://(.+)">', body).group(1)
+        return orig
+
     async def send_msg(self, evt: MessageEvent, info: dict) -> None:
         if info['original'].startswith("mxc"):
             await self.client.send_image(evt.room_id, url=info['original'], file_name=info['filename'],
@@ -134,10 +138,11 @@ class GifMe(Plugin):
                     )
                 )
         else:
-            await evt.respond(f"<blockquote><h1><em>{info['body']}</em></h1>\
-                                <p>-- <a href=\"https://matrix.to/#/{info['sender']}\">{info['sender']}</a></p>\
-                                </blockquote>", 
-                                allow_html=True) 
+            msg = f"<blockquote><h1><em>{info['body']}</em></h1>\
+                        <p>-- <a href=\"https://matrix.to/#/{info['sender']}\">{info['sender']}</a></p>\
+                        <a href=\"mxorig://{info['original']}\"></a>\
+                        </blockquote>"
+            await evt.respond(msg, allow_html=True) 
 
     @command.new(name=get_command_name, aliases=is_alias, help="save and tag, or return, message contents", require_subcommand=False,
                  arg_fallthrough=False)
@@ -245,8 +250,12 @@ class GifMe(Plugin):
                 message_info["original"] = reply_event.event_id
 
         elif reply_event.content.msgtype == MessageType.NOTICE:
-            await evt.reply("i'm not going to save that, it looks like it's from a bot.")
-            return None
+            try:
+                body = reply_event.content.formatted_body
+                message_info["original"] = self.parse_original(body)
+            except Exception as e:
+                await evt.reply("i'm not going to save that, it looks like it's from a bot.")
+                return None
 
         else:
             await evt.respond(f"i don't know what {reply_event.content.msgtype} is, but i can't save it.")
@@ -297,11 +306,13 @@ class GifMe(Plugin):
 
         if reply_event.content.msgtype == MessageType.IMAGE:
             original = reply_event.content.url
-        elif reply_event.content.msgtype == MessageType.TEXT:
-            original = reply_event.event_id
         else:
-            await evt.respond("i don't recognize this message, sorry.")
-            return None
+            try:
+                body = reply_event.content.formatted_body
+                original = self.parse_original(body)
+            except Exception as e:
+                await evt.respond(f"i couldn't find the original in the message content, sorry. {e}")
+                return None
 
         entry = await self.get_row(original)
         if entry:
