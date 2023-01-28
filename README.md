@@ -25,6 +25,9 @@ queries so no need to get too crazy about quotes or separation. _NOTE: if the im
 the command will update the tags for the existing image, minus any duplicate words. This effectively enables you to add
 more tags to an entry._
 
+alternatively, you can automatically save a message to the database using either its filename or message contents as
+tags by using the 💾 emoji reaction on the message!
+
 `!gifme tags` should be used in a reply to a message sent by the bot to show all tags associated with the image.
 
 ## config
