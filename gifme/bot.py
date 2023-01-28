@@ -74,7 +74,7 @@ class GifMe(Plugin):
         info['height'] = int(picked_gif['images']['original']['height']) or 270
         info['size'] = int(picked_gif['images']['original']['size'])
         info['mimetype'] = 'image/gif'
-        info['filename'] = "giphy.gif"
+        info['filename'] = f"{query}.gif"
 
         ## download the image, and upload it to the matrix media repository
         async with self.http.get(gif_link) as response:
@@ -89,14 +89,26 @@ class GifMe(Plugin):
         ## return an object with the necessary information to send a message
         return info
 
-    async def save_msg(self, info: dict, tags: str) -> None:
-        tags = self.sanistring(tags)
+    async def store_msg(self, info: dict, tags: str) -> list:
+        if not tags:
+            ## if no tags supplied, use the filename to generate some tags
+            ## sanitize the filename again because we don't know where it came from
+            if 'filename' in info:
+                tags = self.sanistring(info['filename'])
+                tags = re.sub(r'(gif|jpeg|jpg|png|webp|mp4|m4a|ogg|mp3)', '', tags)
+            else:
+                tags = self.sanistring(info['body'])
+        else:
+            tags = self.sanistring(tags)
+
+
         dbq = """
                 INSERT INTO responses (msg_info, tags) VALUES ($1, $2)
               """
 
         json_info = json.dumps(info)
         await self.database.execute(dbq, json_info, tags)
+        return tags
 
     async def update_tags(self, tags: str, rowid: int) -> None:
         tags = self.sanistring(tags)
@@ -207,6 +219,100 @@ class GifMe(Plugin):
         await self.send_msg(evt, img_info)
 
 
+
+
+
+    async def save_msg(self, source_evt: MessageEvent, tags="") -> None:
+
+        message_info = {}
+        if not tags:
+            tags = ""
+
+        ## fetch our replied-to event contents
+        if source_evt.content.msgtype == MessageType.IMAGE:
+            message_info["original"] = source_evt.content.url
+            message_info["filename"] = source_evt.content.body
+            message_info["mimetype"] = source_evt.content.info.mimetype
+            message_info["height"] = source_evt.content.info.height
+            message_info["width"] = source_evt.content.info.width
+            message_info["size"] = source_evt.content.info.size
+
+        elif source_evt.content.msgtype == MessageType.TEXT:
+            if self.config["allow_non_files"] == False:
+                await source_evt.reply("i'm not allowed to save anything that isn't a file upload")
+                return None
+            else:
+                message_info["body"] = source_evt.content.body
+                message_info["sender"] = source_evt.sender
+                message_info["original"] = source_evt.event_id
+
+        elif source_evt.content.msgtype == MessageType.NOTICE:
+            try:
+                body = source_evt.content.formatted_body
+                message_info["original"] = self.parse_original(body)
+            except Exception as e:
+                await source_evt.reply("i'm not going to save that, it looks like it's from a bot.")
+                return None
+
+        else:
+            await source_evt.reply(f"i don't know what {source_evt.content.msgtype} is, but i can't save it.")
+            return None
+
+        if not message_info["original"]:
+            await evt.respond(f"sorry, that image appears to be encrypted, and i can't save it.")
+            return None
+
+        row = await self.get_row(message_info["original"])
+
+        ## if the entry exists, just append new tags
+        if row:
+            rowid = row['docid']
+            try:
+                tags = tags.split()
+            except:
+                pass
+            oldtags = row["tags"].split()
+            difftags = []
+            newtags = oldtags
+
+            for t in tags:
+                if t in oldtags:
+                    pass
+                else:
+                    difftags.append(t)
+
+            updatemsg = await source_evt.reply(f"matching entry found, adding the following new tags: {difftags}")
+            updateevt = await self.client.get_event(evt.room_id, updatemsg)
+            newtags.extend(difftags)
+            try:
+                await self.update_tags(' '.join(newtags), rowid)
+                await updateevt.react(f"✅")
+            except:
+                await updateevt.react(f"❌")
+        else:
+            saved_tags = await self.store_msg(message_info, tags)
+            await source_evt.reply(f"saved to database with tags: {saved_tags}")
+
+
+
+    @command.passive(regex='💾', field=lambda evt: evt.content.relates_to.key,
+                     event_type=EventType.REACTION, msgtypes=None)
+    async def save_react(self, evt: ReactionEvent, key: Tuple[str]) -> None:
+        source_evt = await self.client.get_event(evt.room_id, evt.content.relates_to.event_id)
+
+        if self.config["restrict_users"]:
+            if evt.sender in self.config["allowed_users"]:
+                pass
+            else:
+                await source_evt.respond(f"{evt.sender} reacted with the save\
+                            emoji, but is not allowed to save things to my database.")
+                return None
+
+        await self.save_msg(source_evt)
+
+
+
+
     @gifme.subcommand("save", help="save and tag a message to the database")
     @command.argument("tags", pass_raw=True, required=True)
     async def save(self, evt: MessageEvent, tags: str) -> None:
@@ -224,74 +330,13 @@ class GifMe(Plugin):
             return None
 
         tags = self.sanistring(tags)
-        if not tags:
-            await evt.respond("you need to supply at least one tag so you can reference it later")
-            return None
 
         message_info = {}
 
-        ## fetch our replied-to event contents
-        reply_event = await self.client.get_event(evt.room_id, evt.content.get_reply_to())
-        if reply_event.content.msgtype == MessageType.IMAGE:
-            message_info["original"] = reply_event.content.url
-            message_info["filename"] = reply_event.content.body
-            message_info["mimetype"] = reply_event.content.info.mimetype
-            message_info["height"] = reply_event.content.info.height
-            message_info["width"] = reply_event.content.info.width
-            message_info["size"] = reply_event.content.info.size
+        source_evt = await self.client.get_event(evt.room_id, evt.content.get_reply_to())
 
-        elif reply_event.content.msgtype == MessageType.TEXT:
-            if self.config["allow_non_files"] == False:
-                await evt.respond("i'm not allowed to save anything that isn't a file upload")
-                return None
-            else:
-                message_info["body"] = reply_event.content.body
-                message_info["sender"] = reply_event.sender
-                message_info["original"] = reply_event.event_id
 
-        elif reply_event.content.msgtype == MessageType.NOTICE:
-            try:
-                body = reply_event.content.formatted_body
-                message_info["original"] = self.parse_original(body)
-            except Exception as e:
-                await evt.reply("i'm not going to save that, it looks like it's from a bot.")
-                return None
-
-        else:
-            await evt.respond(f"i don't know what {reply_event.content.msgtype} is, but i can't save it.")
-            return None
-
-        if not message_info["original"]:
-            await evt.respond(f"sorry, that image appears to be encrypted, and i can't save it.")
-            return None
-
-        row = await self.get_row(message_info["original"])
-
-        ## if the entry exists, just append new tags
-        if row:
-            rowid = row['docid']
-            tags = tags.split()
-            oldtags = row["tags"].split()
-            difftags = []
-            newtags = oldtags
-
-            for t in tags:
-                if t in oldtags:
-                    pass
-                else:
-                    difftags.append(t)
-
-            updatemsg = await evt.respond(f"matching entry found, adding the following new tags: {difftags}")
-            updateevt = await self.client.get_event(evt.room_id, updatemsg)
-            newtags.extend(difftags)
-            try:
-                await self.update_tags(' '.join(newtags), rowid)
-                await updateevt.react(f"✅")
-            except:
-                await updateevt.react(f"❌")
-        else:
-            await self.save_msg(message_info, tags)
-            await evt.respond(f"saved to database!")
+        await self.save_msg(source_evt, tags)
 
     @gifme.subcommand("tags", help="return the tags associated with a specific response from the database")
     async def return_tags(self, evt: MessageEvent) -> None:
