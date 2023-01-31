@@ -43,7 +43,9 @@ class GifMe(Plugin):
         return command in self.config["command_aliases"]
 
     def sanistring(self, query: str) -> str:
-        sani = re.sub(r'[^a-zA-Z0-9\s]', '', query).lower()
+        sani = re.sub(r'(\.[a-zA-Z0-9]+)$', '', query) # strip file suffixes first
+        sani = re.sub(r'(_|-|\.)', ' ', sani) # substitute common delimiters with normal spaces
+        sani = re.sub(r'[^a-zA-Z0-9\s]', '', sani).lower() # strip out any other special characters and make lowercase
         return sani
         
     async def get_giphy(self, evt: MessageEvent, query: str) -> None:
@@ -100,7 +102,6 @@ class GifMe(Plugin):
             ## sanitize the filename again because we don't know where it came from
             if 'filename' in info:
                 tags = self.sanistring(info['filename'])
-                tags = re.sub(r'(gif|jpeg|jpg|png|webp|mp4|m4a|ogg|mp3)', '', tags)
             else:
                 tags = self.sanistring(info['body'])
         else:
