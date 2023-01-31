@@ -259,7 +259,7 @@ class GifMe(Plugin):
             return None
 
         if not message_info["original"]:
-            await evt.respond(f"sorry, that image appears to be encrypted, and i can't save it.")
+            await source_evt.respond(f"sorry, that image appears to be encrypted, and i can't save it.")
             return None
 
         row = await self.get_row(message_info["original"])
