@@ -67,7 +67,10 @@ class GifMe(Plugin):
             api_data = await api_response.json()
 
         ## pick a random gif from the list of results returned
-        picked_gif = random.choice(api_data['data'])
+        try:
+            picked_gif = random.choice(api_data['data'])
+        except Exception as e:
+            await evt.reply(f"Oops, I had an accident trying to pick a random Gif from Giphy: {e}")
 
         ## get the info for the gif we've picked
         gif_link = picked_gif['images']['original']['url']
