@@ -147,14 +147,25 @@ class GifMe(Plugin):
 
     async def send_msg(self, evt: MessageEvent, info: dict) -> None:
         if info['original'].startswith("mxc"):
-            await self.client.send_image(evt.room_id, url=info['original'], file_name=info['filename'],
-                    info=ImageInfo(
-                        mimetype=info['mimetype'],
-                        width=info['width'],
-                        height=info['height'],
-                        size=info['size']
+            if info['mimetype'].startswith('image'):
+                await self.client.send_image(evt.room_id, url=info['original'], file_name=info['filename'],
+                        info=ImageInfo(
+                            mimetype=info['mimetype'],
+                            width=info['width'],
+                            height=info['height'],
+                            size=info['size']
+                        )
                     )
-                )
+            elif info['mimetype'].startswith('video'):
+                await self.client.send_file(evt.room_id, url=info['original'], file_name=info['filename'],
+                        file_type=MessageType.VIDEO,
+                        info=ImageInfo(
+                            mimetype=info['mimetype'],
+                            width=info['width'],
+                            height=info['height'],
+                            size=info['size']
+                        )
+                    )
         else:
             msg = f"<blockquote><h1><em>{info['body']}</em></h1>\
                         <p>-- <a href=\"https://matrix.to/#/{info['sender']}\">{info['sender']}</a></p>\
@@ -235,7 +246,7 @@ class GifMe(Plugin):
             tags = ""
 
         ## fetch our replied-to event contents
-        if source_evt.content.msgtype == MessageType.IMAGE:
+        if source_evt.content.msgtype == MessageType.IMAGE or source_evt.content.msgtype == MessageType.VIDEO:
             message_info["original"] = source_evt.content.url
             message_info["filename"] = source_evt.content.body
             message_info["mimetype"] = source_evt.content.info.mimetype
@@ -355,7 +366,7 @@ class GifMe(Plugin):
         original = None
         reply_event = await self.client.get_event(evt.room_id, evt.content.get_reply_to())
 
-        if reply_event.content.msgtype == MessageType.IMAGE:
+        if reply_event.content.msgtype == MessageType.IMAGE or reply_event.content.msgtype == MessageType.VIDEO:
             original = reply_event.content.url
         else:
             try:
