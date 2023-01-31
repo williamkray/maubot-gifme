@@ -140,10 +140,92 @@ class GifMe(Plugin):
 
         row = await self.database.fetchrow(dbq, original)
         return row
+    
+    async def delete_row(self, row: int) -> None:
+        dbq = """
+                DELETE FROM responses WHERE docid = $1
+              """
+
+        row = await self.database.execute(dbq, row)
 
     def parse_original(self, body: str):
         orig = re.search(r'mxorig://(.+)">', body).group(1)
+
+
+    async def save_msg(self, source_evt: MessageEvent, tags="") -> None:
+
+        message_info = {}
+        if not tags:
+            tags = ""
+
+        ## fetch our replied-to event contents
+        if source_evt.content.msgtype == MessageType.IMAGE or source_evt.content.msgtype == MessageType.VIDEO:
+            message_info["original"] = source_evt.content.url
+            message_info["filename"] = source_evt.content.body
+            message_info["mimetype"] = source_evt.content.info.mimetype
+            message_info["height"] = source_evt.content.info.height
+            message_info["width"] = source_evt.content.info.width
+            message_info["size"] = source_evt.content.info.size
+
+        elif source_evt.content.msgtype == MessageType.TEXT:
+            if self.config["allow_non_files"] == False:
+                await source_evt.reply("i'm not allowed to save anything that isn't a file upload")
+                return None
+            else:
+                message_info["body"] = source_evt.content.body
+                message_info["sender"] = source_evt.sender
+                message_info["original"] = source_evt.event_id
+
+        elif source_evt.content.msgtype == MessageType.NOTICE:
+            try:
+                body = source_evt.content.formatted_body
+                message_info["original"] = self.parse_original(body)
+            except Exception as e:
+                await source_evt.reply("i'm not going to save that, it looks like it's from a bot.")
+                return None
+
+        else:
+            await source_evt.reply(f"i don't know what {source_evt.content.msgtype} is, but i can't save it.")
+            return None
+
+        if not message_info["original"]:
+            await source_evt.reply(f"sorry, that image appears to be encrypted, and i can't save it.")
+            return None
+
+        row = await self.get_row(message_info["original"])
+
+        ## if the entry exists, just append new tags
+        if row:
+            rowid = row['docid']
+            try:
+                tags = tags.split()
+            except:
+                pass
+            oldtags = row["tags"].split()
+            difftags = []
+            newtags = oldtags
+
+            for t in tags:
+                if t in oldtags:
+                    pass
+                else:
+                    difftags.append(t)
+
+            updatemsg = await source_evt.reply(f"matching entry found, adding the following new tags: {difftags}")
+            updateevt = await self.client.get_event(source_evt.room_id, updatemsg)
+            newtags.extend(difftags)
+            try:
+                await self.update_tags(' '.join(newtags), rowid)
+                await updateevt.react(f"✅")
+            except:
+                await updateevt.react(f"❌")
+        else:
+            saved_tags = await self.store_msg(message_info, tags)
+            await source_evt.reply(f"saved to database with tags: {str(saved_tags)}")
+
+
         return orig
+
 
     async def send_msg(self, evt: MessageEvent, info: dict) -> None:
         if info['original'].startswith("mxc"):
@@ -238,80 +320,6 @@ class GifMe(Plugin):
 
 
 
-
-    async def save_msg(self, source_evt: MessageEvent, tags="") -> None:
-
-        message_info = {}
-        if not tags:
-            tags = ""
-
-        ## fetch our replied-to event contents
-        if source_evt.content.msgtype == MessageType.IMAGE or source_evt.content.msgtype == MessageType.VIDEO:
-            message_info["original"] = source_evt.content.url
-            message_info["filename"] = source_evt.content.body
-            message_info["mimetype"] = source_evt.content.info.mimetype
-            message_info["height"] = source_evt.content.info.height
-            message_info["width"] = source_evt.content.info.width
-            message_info["size"] = source_evt.content.info.size
-
-        elif source_evt.content.msgtype == MessageType.TEXT:
-            if self.config["allow_non_files"] == False:
-                await source_evt.reply("i'm not allowed to save anything that isn't a file upload")
-                return None
-            else:
-                message_info["body"] = source_evt.content.body
-                message_info["sender"] = source_evt.sender
-                message_info["original"] = source_evt.event_id
-
-        elif source_evt.content.msgtype == MessageType.NOTICE:
-            try:
-                body = source_evt.content.formatted_body
-                message_info["original"] = self.parse_original(body)
-            except Exception as e:
-                await source_evt.reply("i'm not going to save that, it looks like it's from a bot.")
-                return None
-
-        else:
-            await source_evt.reply(f"i don't know what {source_evt.content.msgtype} is, but i can't save it.")
-            return None
-
-        if not message_info["original"]:
-            await source_evt.reply(f"sorry, that image appears to be encrypted, and i can't save it.")
-            return None
-
-        row = await self.get_row(message_info["original"])
-
-        ## if the entry exists, just append new tags
-        if row:
-            rowid = row['docid']
-            try:
-                tags = tags.split()
-            except:
-                pass
-            oldtags = row["tags"].split()
-            difftags = []
-            newtags = oldtags
-
-            for t in tags:
-                if t in oldtags:
-                    pass
-                else:
-                    difftags.append(t)
-
-            updatemsg = await source_evt.reply(f"matching entry found, adding the following new tags: {difftags}")
-            updateevt = await self.client.get_event(source_evt.room_id, updatemsg)
-            newtags.extend(difftags)
-            try:
-                await self.update_tags(' '.join(newtags), rowid)
-                await updateevt.react(f"✅")
-            except:
-                await updateevt.react(f"❌")
-        else:
-            saved_tags = await self.store_msg(message_info, tags)
-            await source_evt.reply(f"saved to database with tags: {saved_tags}")
-
-
-
     @command.passive(regex='💾', field=lambda evt: evt.content.relates_to.key,
                      event_type=EventType.REACTION, msgtypes=None)
     async def save_react(self, evt: ReactionEvent, key: Tuple[str]) -> None:
@@ -381,6 +389,46 @@ class GifMe(Plugin):
             await evt.reply(f"this saved entry has the following tags: {entry['tags']}")
         else:
             await evt.reply(f"i don't see this message in my database.")
+
+    @gifme.subcommand("delete", help="deletes a saved entry from the database")
+    async def delete_entry(self, evt: MessageEvent) -> None:
+        await evt.mark_read()
+
+        if not evt.content.get_reply_to():
+            await evt.reply("use this command in a reply to another message so i know what to delete")
+            return None
+
+        if self.config["restrict_users"]:
+            if evt.sender in self.config["allowed_users"]:
+                pass
+            else:
+                await evt.reply("you're not allowed to do that.")
+                return None
+
+        original = None
+        reply_event = await self.client.get_event(evt.room_id, evt.content.get_reply_to())
+
+        if reply_event.content.msgtype == MessageType.IMAGE or reply_event.content.msgtype == MessageType.VIDEO:
+            original = reply_event.content.url
+        else:
+            try:
+                body = reply_event.content.formatted_body
+                original = self.parse_original(body)
+            except Exception as e:
+                await evt.reply(f"i couldn't find the original in the message content, sorry. {e}")
+                return None
+
+        entry = await self.get_row(original)
+        if entry:
+            try:
+                await self.delete_row(entry['docid'])
+                await evt.reply(f"i have deleted the entry from my database 🚮")
+            except Exception as e:
+                await evt.reply(f"oh dear, something went wrong when deleting the entry: {e}")
+                return None
+        else:
+            await evt.reply(f"i don't see this message in my database.")
+
 
 
     @classmethod
