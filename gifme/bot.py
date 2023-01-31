@@ -60,7 +60,8 @@ class GifMe(Plugin):
             "http://api.giphy.com/v1/gifs/search?{}".format(url_params)
         ) as api_response:
             if api_response.status != 200:
-                await evt.respond(f"Something went wrong: {api_response.status}")
+                await evt.reply(f"Something went wrong, I got the following response from \
+                            the Giphy search API: {api_response.status}")
                 return None
 
             api_data = await api_response.json()
@@ -79,7 +80,8 @@ class GifMe(Plugin):
         ## download the image, and upload it to the matrix media repository
         async with self.http.get(gif_link) as response:
             if response.status != 200:
-                await evt.respond(f"Something went wrong: {response.status}")
+                await evt.reply(f"Something went wrong, I got the following response when \
+                                downloading the image from Giphy: {response.status}")
                 return None
 
             imgdata = await response.read()
@@ -197,7 +199,7 @@ class GifMe(Plugin):
                     msg_info = await self.get_giphy(evt, tags)
                     fallback_status = 1
                 else:
-                    await evt.respond("i couldn't come up with anything, sorry.")
+                    await evt.reply("i couldn't come up with anything, sorry.")
                     return None
 
         await self.send_msg(evt, msg_info)
@@ -259,7 +261,7 @@ class GifMe(Plugin):
             return None
 
         if not message_info["original"]:
-            await source_evt.respond(f"sorry, that image appears to be encrypted, and i can't save it.")
+            await source_evt.reply(f"sorry, that image appears to be encrypted, and i can't save it.")
             return None
 
         row = await self.get_row(message_info["original"])
@@ -304,7 +306,7 @@ class GifMe(Plugin):
             if evt.sender in self.config["allowed_users"]:
                 pass
             else:
-                await source_evt.respond(f"{evt.sender} reacted with the save\
+                await source_evt.reply(f"{evt.sender} reacted with the save\
                             emoji, but is not allowed to save things to my database.")
                 return None
 
@@ -322,7 +324,7 @@ class GifMe(Plugin):
             if evt.sender in self.config["allowed_users"]:
                 pass
             else:
-                await evt.respond("you're not allowed to do that.")
+                await evt.reply("you're not allowed to do that.")
                 return None
 
         if not evt.content.get_reply_to():
@@ -356,14 +358,14 @@ class GifMe(Plugin):
                 body = reply_event.content.formatted_body
                 original = self.parse_original(body)
             except Exception as e:
-                await evt.respond(f"i couldn't find the original in the message content, sorry. {e}")
+                await evt.reply(f"i couldn't find the original in the message content, sorry. {e}")
                 return None
 
         entry = await self.get_row(original)
         if entry:
-            await evt.respond(f"this saved entry has the following tags: {entry['tags']}")
+            await evt.reply(f"this saved entry has the following tags: {entry['tags']}")
         else:
-            await evt.respond(f"i don't see this message in my database.")
+            await evt.reply(f"i don't see this message in my database.")
 
 
     @classmethod
