@@ -55,7 +55,7 @@ class GifMe(Plugin):
         api_data = None
         info = {}
         imgdata = None
-        url_params = urllib.parse.urlencode({"q": query, "api_key": self.config["giphy_api_key"], "limit": 10})
+        url_params = urllib.parse.urlencode({"q": query, "api_key": self.config["giphy_api_key"], "limit": 5})
 
         ## first we get a json response from giphy with our query parameters
         async with self.http.get(
