@@ -91,7 +91,10 @@ class GifMe(Plugin):
 
             imgdata = await response.read()
 
-        info['original'] = await self.client.upload_media(imgdata, mime_type=info['mimetype'], filename=info['filename'])
+        try:
+            info['original'] = await self.client.upload_media(imgdata, mime_type=info['mimetype'], filename=info['filename'])
+        except Exception as e:
+            await evt.reply(f"Oops, I had an accident uploading my image to matrix: {e}")
 
         ## return an object with the necessary information to send a message
         return info
