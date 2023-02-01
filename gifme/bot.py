@@ -153,6 +153,7 @@ class GifMe(Plugin):
 
     def parse_original(self, body: str):
         orig = re.search(r'mxorig://(.+)">', body).group(1)
+        return orig
 
 
     async def save_msg(self, source_evt: MessageEvent, tags="") -> None:
@@ -227,7 +228,6 @@ class GifMe(Plugin):
             await source_evt.reply(f"saved to database with tags: {str(saved_tags)}")
 
 
-        return orig
 
 
     async def send_msg(self, evt: MessageEvent, info: dict) -> None:
