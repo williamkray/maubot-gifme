@@ -10,7 +10,7 @@ import urllib.parse
 from mautrix.client import Client
 from mautrix.types import (Event, MessageType, EventID, UserID, FileInfo, EventType, RoomID,
                             MediaMessageEventContent, TextMessageEventContent, ContentURI,
-                            ReactionEvent, RedactionEvent, ImageInfo)
+                            ReactionEvent, RedactionEvent, ImageInfo, RelationType)
 from mautrix.util.config import BaseProxyConfig, ConfigUpdateHelper
 from maubot import Plugin, MessageEvent
 from maubot.handlers import command, event
@@ -233,11 +233,13 @@ class GifMe(Plugin):
     async def send_msg(self, evt: MessageEvent, info: dict) -> None:
         thread = False
         content = None
+        parent_thread = evt.content.get_thread_parent()
 
-        if evt.content.get_thread_parent._relates_to:
+        if parent_thread:
            thread = True
-            await evt.respond(f"this is a debug message to show that reply_in_thread should be set to {thread}. parent\
-                            thread is {evt.content.get_thread_parent}")
+
+#       await evt.respond(f"this is a debug message to show that reply_in_thread should be set to {thread}.\
+#                           parent thread is {parent_thread}")
 
         self.log.debug(f"THREAD STATUS: {thread}")
 
@@ -272,7 +274,7 @@ class GifMe(Plugin):
                         <a href=\"mxorig://{info['original']}\"></a>\
                         </blockquote>"
 
-        await evt.respond(content=content, allow_html=True) 
+        await evt.respond(content=content, allow_html=True, reply_in_thread=thread) 
 
     @command.new(name=get_command_name, aliases=is_alias, help="save and tag, or return, message contents", require_subcommand=False,
                  arg_fallthrough=False)
