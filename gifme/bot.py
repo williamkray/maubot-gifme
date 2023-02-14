@@ -231,6 +231,15 @@ class GifMe(Plugin):
 
 
     async def send_msg(self, evt: MessageEvent, info: dict) -> None:
+        thread = False
+
+        if evt.content.get_thread_parent._relates_to:
+           thread = True
+            await evt.respond(f"this is a debug message to show that reply_in_thread should be set to {thread}. parent\
+                            thread is {evt.content.get_thread_parent}")
+
+        self.log.debug(f"THREAD STATUS: {thread}")
+
         if info['original'].startswith("mxc"):
             if info['mimetype'].startswith('image'):
                 await self.client.send_image(evt.room_id, url=info['original'], file_name=info['filename'],
@@ -239,8 +248,11 @@ class GifMe(Plugin):
                             width=info['width'],
                             height=info['height'],
                             size=info['size']
+                            ),
+                        relates_to=RelationType(
+                            event_id=evt.content.get_thread_parent
+                            )
                         )
-                    )
             elif info['mimetype'].startswith('video'):
                 await self.client.send_file(evt.room_id, url=info['original'], file_name=info['filename'],
                         file_type=MessageType.VIDEO,
@@ -249,14 +261,15 @@ class GifMe(Plugin):
                             width=info['width'],
                             height=info['height'],
                             size=info['size']
-                        )
+                        ),
+                        relates_to=evt.content.get_thread_parent
                     )
         else:
             msg = f"<blockquote><h1><em>{info['body']}</em></h1>\
                         <p>-- <a href=\"https://matrix.to/#/{info['sender']}\">{info['sender']}</a></p>\
                         <a href=\"mxorig://{info['original']}\"></a>\
                         </blockquote>"
-            await evt.respond(msg, allow_html=True) 
+            await evt.respond(msg, allow_html=True, reply=True, reply_in_thread=thread) 
 
     @command.new(name=get_command_name, aliases=is_alias, help="save and tag, or return, message contents", require_subcommand=False,
                  arg_fallthrough=False)
