@@ -274,7 +274,7 @@ class GifMe(Plugin):
                         <a href=\"mxorig://{info['original']}\"></a>\
                         </blockquote>"
 
-        await evt.respond(content=content, allow_html=True, reply_in_thread=thread) 
+        await evt.respond(content=content, allow_html=True, reply_in_thread=thread, reply=True) 
 
     @command.new(name=get_command_name, aliases=is_alias, help="save and tag, or return, message contents", require_subcommand=False,
                  arg_fallthrough=False)
