@@ -233,9 +233,10 @@ class GifMe(Plugin):
     async def send_msg(self, evt: MessageEvent, info: dict) -> None:
 
         if info['original'].startswith("mxc"):
-            if info['mimetype'].startswith('image'):
+            try:
+                msgtype = re.match(r'^(image|video)\/.+', info['mimetype']).group(1)
                 content = MediaMessageEventContent(
-                            msgtype='m.image',
+                            msgtype=f"m.{msgtype}",
                             url=info['original'],
                             body=info['filename'],
                             info=ImageInfo(
@@ -245,18 +246,8 @@ class GifMe(Plugin):
                                 size=info['size']
                                 )
                         )
-            elif info['mimetype'].startswith('video'):
-                content = MediaMessageEventContent(
-                            msgtype='m.video',
-                            url=info['original'],
-                            body=info['filename'],
-                            info=ImageInfo(
-                                mimetype=info['mimetype'],
-                                width=info['width'],
-                                height=info['height'],
-                                size=info['size']
-                                )
-                        )
+            except:
+                self.log.error(f"mimetype not supported: {info['mimetype']}")
         else:
             content = f"<blockquote><h1><em>{info['body']}</em></h1>\
                         <p>-- <a href=\"https://matrix.to/#/{info['sender']}\">{info['sender']}</a></p>\
