@@ -231,17 +231,6 @@ class GifMe(Plugin):
 
 
     async def send_msg(self, evt: MessageEvent, info: dict) -> None:
-        thread = False
-        content = None
-        parent_thread = evt.content.get_thread_parent()
-
-        if parent_thread:
-           thread = True
-
-#       await evt.respond(f"this is a debug message to show that reply_in_thread should be set to {thread}.\
-#                           parent thread is {parent_thread}")
-
-        self.log.debug(f"THREAD STATUS: {thread}")
 
         if info['original'].startswith("mxc"):
             if info['mimetype'].startswith('image'):
@@ -274,7 +263,7 @@ class GifMe(Plugin):
                         <a href=\"mxorig://{info['original']}\"></a>\
                         </blockquote>"
 
-        await evt.respond(content=content, allow_html=True, reply_in_thread=thread, reply=True) 
+        await evt.respond(content=content, allow_html=True) 
 
     @command.new(name=get_command_name, aliases=is_alias, help="save and tag, or return, message contents", require_subcommand=False,
                  arg_fallthrough=False)
