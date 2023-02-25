@@ -225,7 +225,7 @@ class GifMe(Plugin):
               except:
                 await updateevt.react(f"❌")
             else:
-              await source_evt.reply(f"It looks like this image is already saved with these tags.")
+              await source_evt.reply(f"It looks like this is already saved with these tags.")
         else:
             saved_tags = await self.store_msg(message_info, tags)
             await source_evt.reply(f"saved to database with tags: {str(saved_tags)}")
