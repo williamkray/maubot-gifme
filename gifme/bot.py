@@ -218,9 +218,9 @@ class GifMe(Plugin):
             if len(difftags) != 0:
               updatemsg = await source_evt.reply(f"matching entry found, adding the following new tags: {difftags}")
               updateevt = await self.client.get_event(source_evt.room_id, updatemsg)
+              newtags.extend(difftags)
             else:
-              await source_evt.reply(f"It looks like this image is already saved with these tags."
-            newtags.extend(difftags)
+              await source_evt.reply(f"It looks like this image is already saved with these tags.")
             try:
                 await self.update_tags(' '.join(newtags), rowid)
                 await updateevt.react(f"✅")
