@@ -163,7 +163,7 @@ class GifMe(Plugin):
             tags = ""
 
         ## fetch our replied-to event contents
-        if source_evt.content.msgtype == MessageType.IMAGE or source_evt.content.msgtype == MessageType.VIDEO:
+        if source_evt.content.msgtype in (MessageType.IMAGE, MessageType.VIDEO):
             message_info["original"] = source_evt.content.url
             message_info["filename"] = source_evt.content.body
             message_info["mimetype"] = source_evt.content.info.mimetype
@@ -171,22 +171,22 @@ class GifMe(Plugin):
             message_info["width"] = source_evt.content.info.width
             message_info["size"] = source_evt.content.info.size
 
-        elif source_evt.content.msgtype == MessageType.TEXT:
+        elif source_evt.content.msgtype.is_text():
+            # ("m.text", "m.emote", "m.notice")
             if self.config["allow_non_files"] == False:
                 await source_evt.reply("i'm not allowed to save anything that isn't a file upload")
                 return None
-            else:
-                message_info["body"] = source_evt.content.body
-                message_info["sender"] = source_evt.sender
-                message_info["original"] = source_evt.event_id
+            message_info["body"] = source_evt.content.body
+            message_info["sender"] = source_evt.sender
+            message_info["original"] = source_evt.event_id
 
-        elif source_evt.content.msgtype == MessageType.NOTICE:
-            try:
-                body = source_evt.content.formatted_body
-                message_info["original"] = self.parse_original(body)
-            except Exception as e:
-                await source_evt.reply("i'm not going to save that, it looks like it's from a bot.")
-                return None
+            if source_evt.content.msgtype == MessageType.NOTICE:
+                try:
+                    body = source_evt.content.formatted_body
+                    message_info["original"] = self.parse_original(body)
+                except Exception as e:
+                    await source_evt.reply("i'm not going to save that, it looks like it's from a bot.")
+                    return None
 
         else:
             await source_evt.reply(f"i don't know what {source_evt.content.msgtype} is, but i can't save it.")
