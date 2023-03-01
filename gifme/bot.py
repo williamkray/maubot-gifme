@@ -176,6 +176,10 @@ class GifMe(Plugin):
                 await source_evt.reply("i'm not allowed to save anything that isn't a file upload")
                 return None
             else:
+                try:
+                    message_info["formatted_body"] = source_evt.content.formatted_body
+                except:
+                    pass
                 message_info["body"] = source_evt.content.body
                 message_info["sender"] = source_evt.sender
                 message_info["original"] = source_evt.event_id
@@ -252,7 +256,8 @@ class GifMe(Plugin):
             except:
                 self.log.error(f"mimetype not supported: {info['mimetype']}")
         else:
-            content = f"<blockquote><p>{info['body']}</p>\
+            msgbody = info['body'] if not 'formatted_body' in info else info['formatted_body']
+            content = f"<blockquote><p>{msgbody}</p>\
                         <p>-- <a href=\"https://matrix.to/#/{info['sender']}\">{info['sender']}</a></p>\
                         <a href=\"mxorig://{info['original']}\"></a>\
                         </blockquote>"
