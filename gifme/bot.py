@@ -261,7 +261,7 @@ class GifMe(Plugin):
             except:
                 self.log.error(f"mimetype not supported: {info['mimetype']}")
         else:
-            msgbody = info['body'] if not 'formatted_body' in info else info['formatted_body']
+            msgbody = info['body'] if not 'formatted_body' in info or info['formatted_body'] == None else info['formatted_body']
             content = f"<blockquote><p>{msgbody}</p>\
                         <p>--<a href=\"https://matrix.to/#/{info['sender']}\">{info['sender']}</a></p>\
                         <a href=\"mxorig://{info['original']}\"></a>\
