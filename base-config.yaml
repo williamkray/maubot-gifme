@@ -16,6 +16,10 @@ giphy_api_key: ""
 ## allow saving messages in plain-text to the database? security risk for encrypted rooms!
 allow_non_files: true
 
+## send a message with every image returned from the database?
+## this informs people that the response is already saved and does not need to be saved again
+say_already_saved: false
+
 ## define a list of users who can save messages to the database?
 restrict_users: false
 

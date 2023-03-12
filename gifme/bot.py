@@ -27,6 +27,7 @@ class Config(BaseProxyConfig):
         helper.copy("fallback_threshold")
         helper.copy("giphy_api_key")
         helper.copy("allow_non_files")
+        helper.copy("say_already_saved")
         helper.copy("restrict_users")
         helper.copy("allowed_users")
 
@@ -156,7 +157,7 @@ class GifMe(Plugin):
         return orig
 
 
-    async def save_msg(self, source_evt: MessageEvent, tags="") -> None:
+    async def save_msg(self, source_evt: MessageEvent, saver: UserID, tags="") -> None:
 
         message_info = {}
         if not tags:
@@ -220,16 +221,20 @@ class GifMe(Plugin):
                     difftags.append(t)
                     
             if len(difftags) != 0:
-              updatemsg = await source_evt.reply(f"matching entry found, adding the following new tags: {difftags}")
-              updateevt = await self.client.get_event(source_evt.room_id, updatemsg)
-              newtags.extend(difftags)
-              try:
-                await self.update_tags(' '.join(newtags), rowid)
-                await updateevt.react(f"✅")
-              except:
-                await updateevt.react(f"❌")
+                updatemsg = await source_evt.reply(f"matching entry found, adding the following new tags: {difftags}")
+                updateevt = await self.client.get_event(source_evt.room_id, updatemsg)
+                newtags.extend(difftags)
+                try:
+                    await self.update_tags(' '.join(newtags), rowid)
+                    await updateevt.react(f"✅")
+                except:
+                    await updateevt.react(f"❌")
             else:
-              await source_evt.reply(f"It looks like this is already saved with these tags.")
+                if self.config["say_already_saved"]:
+                    # this bot has a bad attitude
+                    await source_evt.reply(f"{saver} reading comprehension grade: 🇫")
+                else:
+                    await source_evt.reply(f"It looks like this is already saved with these tags.")
         else:
             saved_tags = await self.store_msg(message_info, tags)
             await source_evt.reply(f"saved to database with tags: {str(saved_tags)}")
@@ -258,7 +263,7 @@ class GifMe(Plugin):
         else:
             msgbody = info['body'] if not 'formatted_body' in info else info['formatted_body']
             content = f"<blockquote><p>{msgbody}</p>\
-                        <p>-- <a href=\"https://matrix.to/#/{info['sender']}\">{info['sender']}</a></p>\
+                        <p>--<a href=\"https://matrix.to/#/{info['sender']}\">{info['sender']}</a></p>\
                         <a href=\"mxorig://{info['original']}\"></a>\
                         </blockquote>"
 
@@ -309,9 +314,14 @@ class GifMe(Plugin):
                     return None
 
         await self.send_msg(evt, msg_info)
+        
+        if self.config['say_already_saved'] and fallback_status <= 0:
+            await evt.respond("<em>i found this in my personal archives, you don't need to save it again.</em>",
+                              allow_html=True)
+
         if fallback_status > 0:
-            await evt.respond("psst... i found this on giphy. be sure to save\
-                    it if it's any good.")
+            await evt.respond("<em>psst... i found this on giphy. be sure to save\
+                    it if it's any good.</em>", allow_html=True)
 
     @gifme.subcommand("giphy", help="use giphy to search for a gif without using the local collection")
 
@@ -333,6 +343,7 @@ class GifMe(Plugin):
                      event_type=EventType.REACTION, msgtypes=None)
     async def save_react(self, evt: ReactionEvent, key: Tuple[str]) -> None:
         source_evt = await self.client.get_event(evt.room_id, evt.content.relates_to.event_id)
+        saver = evt.sender
 
         if self.config["restrict_users"]:
             if evt.sender in self.config["allowed_users"]:
@@ -342,7 +353,7 @@ class GifMe(Plugin):
                             emoji, but is not allowed to save things to my database.")
                 return None
 
-        await self.save_msg(source_evt)
+        await self.save_msg(source_evt, saver=saver)
 
 
 
@@ -368,9 +379,10 @@ class GifMe(Plugin):
         message_info = {}
 
         source_evt = await self.client.get_event(evt.room_id, evt.content.get_reply_to())
+        saver = evt.sender
 
 
-        await self.save_msg(source_evt, tags)
+        await self.save_msg(source_evt, saver=saver, tags=tags)
 
     @gifme.subcommand("tags", help="return the tags associated with a specific response from the database")
     async def return_tags(self, evt: MessageEvent) -> None:
