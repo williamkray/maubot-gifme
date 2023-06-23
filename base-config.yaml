@@ -4,14 +4,17 @@ command_aliases:
   - gifme
   - gif
 
-## enable fallback to giphy search? must have a giphy api key defined below
-allow_fallback: true
+## enable fallback to giphy/tenor search? must have appropriate api keys defined below
+## options: giphy tenor
+## leave empty to disallow fallback
+allow_fallback: giphy
 
 ## minimum number of database entries required to prevent falling back to giphy search,
 ## if fallback is enabled
 fallback_threshold: 1
 
 giphy_api_key: ""
+tenor_api_key: ""
 
 ## allow saving messages in plain-text to the database? security risk for encrypted rooms!
 allow_non_files: true
