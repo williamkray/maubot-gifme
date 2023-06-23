@@ -6,6 +6,8 @@ a maubot plugin that saves gifs, memes, or optionally anything else someone has 
 return it when those tags are called. written because frankly, giphy has gone downhill and a private collection is more
 reliable when it comes to a community's expectations of what the reaction should be.
 
+add a giphy api key or a tenor api (v2 only!) api key to the config for fallback to these external gif libraries.
+
 ## installation
 
 install like any other maubot plugin: either create a `.zip` file of this repository and upload it, or use `mbc build`
