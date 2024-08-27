@@ -1,4 +1,5 @@
 # gifme
+[![Chat on Matrix](https://img.shields.io/badge/chat_on_matrix-%23dev:mssj.me-green)](https://matrix.to/#/#dev:mssj.me)
 
 NOTE: this bot has only been tested, and is assumed to only work, using SQLite as the plugin database.
 
