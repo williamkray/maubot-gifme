@@ -23,6 +23,11 @@ allow_non_files: true
 ## this informs people that the response is already saved and does not need to be saved again
 say_already_saved: false
 
+## use emojis to indicate saved status instead of text messages? messages returned from the internal database will
+## immediately include the card-box emoji reaction to indicate they are from archives. fallback images from
+## tenor/giphy will have a spider-web emoji reaction to indicate they are from the web.
+be_subtle: true
+
 ## define a list of users who can save messages to the database?
 restrict_users: false
 

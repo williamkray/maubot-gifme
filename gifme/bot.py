@@ -30,6 +30,7 @@ class Config(BaseProxyConfig):
         helper.copy("tenor_api_version")
         helper.copy("allow_non_files")
         helper.copy("say_already_saved")
+        helper.copy("be_subtle")
         helper.copy("restrict_users")
         helper.copy("allowed_users")
 
@@ -297,7 +298,7 @@ class GifMe(Plugin):
 
 
 
-    async def send_msg(self, evt: MessageEvent, info: dict) -> None:
+    async def send_msg(self, evt: MessageEvent, info: dict) -> EventID:
 
         if info['original'].startswith("mxc"):
             try:
@@ -322,7 +323,8 @@ class GifMe(Plugin):
                         <a href=\"mxorig://{info['original']}\"></a>\
                         </blockquote>"
 
-        await evt.respond(content=content, allow_html=True) 
+        msg_id = await evt.respond(content=content, allow_html=True) 
+        return msg_id
 
     @command.new(name=get_command_name, aliases=is_alias, help="save and tag, or return, message contents", require_subcommand=False,
                  arg_fallthrough=False)
@@ -347,7 +349,10 @@ class GifMe(Plugin):
         fallback_status = 0
         await evt.mark_read()
         if self.config["fallback_threshold"] < 1:
-            msg_info = await self.get_giphy(evt, tags)
+            if self.config["allow_fallback"].lower() == "giphy":
+                msg_info = await self.get_giphy(evt, tags)
+            elif self.config["allow_fallback"].lower() == "tenor":
+                msg_info = await self.get_tenor(evt, tags)
             ## skip setting fallback_status so we don't send the fallback message every time, that would get old.
         else:
             entries = await self.get_all_entries(tags)
@@ -374,15 +379,43 @@ class GifMe(Plugin):
                     await evt.reply("i couldn't come up with anything, sorry.")
                     return None
 
-        await self.send_msg(evt, msg_info)
+        my_msg = await self.send_msg(evt, msg_info)
+        self.log.debug(f"DEBUG my_msg id is {my_msg}")
+        self.log.debug(f'DEBUG fallback_status is {fallback_status} and fallback threshold is {self.config["fallback_threshold"]}')
         
-        if self.config['say_already_saved'] and fallback_status <= 0:
-            await evt.respond("<em>i found this in my personal archives, you don't need to save it again.</em>",
-                              allow_html=True)
-
         if fallback_status > 0:
-            await evt.respond("<em>psst... i found this on {provider}. be sure to save\
-                    it if it's any good.</em>".format(provider=self.config["allow_fallback"]), allow_html=True)
+            if self.config["fallback_threshold"] > 0:
+                if self.config['be_subtle']:
+                    # we react to our own gif to indicate it came from the web
+                    self.log.debug(f'DEBUG sending reaction to room {evt.room_id}, message {my_msg}')
+                    await self.client.react(evt.room_id, my_msg, '🕸️')
+                else:
+                    await evt.respond("<em>psst... i found this on {provider}. be sure to save\
+                            it if it's any good.</em>".format(provider=self.config["allow_fallback"]), allow_html=True)
+            else:
+                # if our config says we always fallback to web, we dont need to say anything
+                return
+        else: # fallback_status is <= 0 here
+            # first check if we want to indicate anything on responses from our archives
+            if not self.config['say_already_saved']:
+                return None
+            else:
+                if self.config["fallback_threshold"] > 0:
+                    # if we're not being subtle, send a followup
+                    if self.config['be_subtle']:
+                        # if we're being subtle, apply a card-box emoji reaction to our message to indicate it came from our
+                        # archives
+                        self.log.debug(f'DEBUG sending reaction to room {evt.room_id}, message {my_msg}')
+                        await self.client.react(evt.room_id, my_msg, '🗃️')
+                        return None
+                    else:
+                        await evt.respond("<em>i found this in my personal archives, you don't need to save it again.</em>",
+                                          allow_html=True)
+                        return None
+                else:
+                    # dont need to say anything if config says always fallback
+                    return None
+
 
     @gifme.subcommand("giphy", help="use giphy to search for a gif without using the local collection")
 
