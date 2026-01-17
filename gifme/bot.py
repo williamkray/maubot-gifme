@@ -26,8 +26,7 @@ class Config(BaseProxyConfig):
         helper.copy("allow_fallback")
         helper.copy("fallback_threshold")
         helper.copy("giphy_api_key")
-        helper.copy("tenor_api_key")
-        helper.copy("tenor_api_version")
+        helper.copy("klipy_api_key")
         helper.copy("allow_non_files")
         helper.copy("say_already_saved")
         helper.copy("be_subtle")
@@ -104,32 +103,33 @@ class GifMe(Plugin):
         return info
     
 
-    async def get_tenor(self, evt: MessageEvent, query: str) -> None:
+    async def get_klipy(self, evt: MessageEvent, query: str) -> None:
 
-        #query = query.replace('"', '') # remove quotes to pass raw terms to giphy
+        #query = query.replace('"', '') # remove quotes to pass raw terms to klipy
         query = self.sanistring(query)
         api_data = None
         info = {}
         imgdata = None
-        url_params = urllib.parse.urlencode({"q": query, "key": self.config["tenor_api_key"], 
+        url_params = urllib.parse.urlencode({"q": query, "key": self.config["klipy_api_key"], 
                                              "limit": 5})
 
-        ## first we get a json response from giphy with our query parameters
+        ## first we get a json response from klipy with our query parameters
         async with self.http.get(
-            "https://tenor.googleapis.com/v2/search?{params}".format(params=url_params)
+            "https://api.klipy.com/v2/search?{}".format(url_params)
         ) as api_response:
             if api_response.status != 200:
                 await evt.reply(f"Something went wrong, I got the following response from \
-                            the Tenor search API: {api_response.status}")
+                            the Klipy search API: {api_response.status}")
                 return None
 
             api_data = await api_response.json()
 
         ## pick a random gif from the list of results returned
         try:
-            picked_gif = api_data['results'][random.randint(0, 4)]["media_formats"]["gif"]
+            picked_gif = random.choice(api_data['results'])["media_formats"]["gif"]
         except Exception as e:
-            await evt.reply(f"Oops, I had an accident trying to pick a random Gif from Tenor: {e}")
+            await evt.reply(f"Oops, I had an accident trying to pick a random Gif from Klipy: {e}")
+            return None
 
         ## get the info for the gif we've picked
         gif_link = picked_gif['url']
@@ -143,7 +143,7 @@ class GifMe(Plugin):
         async with self.http.get(gif_link) as response:
             if response.status != 200:
                 await evt.reply(f"Something went wrong, I got the following response when \
-                                downloading the image from Tenor: {response.status}")
+                                downloading the image from Klipy: {response.status}")
                 return None
 
             imgdata = await response.read()
@@ -351,8 +351,8 @@ class GifMe(Plugin):
         if self.config["fallback_threshold"] < 1:
             if self.config["allow_fallback"].lower() == "giphy":
                 msg_info = await self.get_giphy(evt, tags)
-            elif self.config["allow_fallback"].lower() == "tenor":
-                msg_info = await self.get_tenor(evt, tags)
+            elif self.config["allow_fallback"].lower() == "klipy":
+                msg_info = await self.get_klipy(evt, tags)
             ## skip setting fallback_status so we don't send the fallback message every time, that would get old.
         else:
             entries = await self.get_all_entries(tags)
@@ -362,8 +362,8 @@ class GifMe(Plugin):
                     if self.config["allow_fallback"].lower() == "giphy":
                         msg_info = await self.get_giphy(evt, tags)
                         fallback_status = 1
-                    elif self.config["allow_fallback"].lower() == "tenor":
-                        msg_info = await self.get_tenor(evt, tags)
+                    elif self.config["allow_fallback"].lower() == "klipy":
+                        msg_info = await self.get_klipy(evt, tags)
                         fallback_status = 1
                 else:
                     chosen = random.choice(entries)
@@ -372,8 +372,8 @@ class GifMe(Plugin):
                 if self.config["allow_fallback"].lower() == "giphy":
                     msg_info = await self.get_giphy(evt, tags)
                     fallback_status = 1
-                elif self.config["allow_fallback"].lower() == "tenor":
-                    msg_info = await self.get_tenor(evt, tags)
+                elif self.config["allow_fallback"].lower() == "klipy":
+                    msg_info = await self.get_klipy(evt, tags)
                     fallback_status = 1
                 else:
                     await evt.reply("i couldn't come up with anything, sorry.")
@@ -431,16 +431,16 @@ class GifMe(Plugin):
         await self.send_msg(evt, img_info)
 
 
-    @gifme.subcommand("tenor", help="use tenor to search for a gif without using the local collection")
+    @gifme.subcommand("klipy", help="use klipy to search for a gif without using the local collection")
 
     @command.argument("tags", pass_raw=True, required=True)
-    async def tenor(self, evt: MessageEvent, tags: str) -> None:
+    async def klipy(self, evt: MessageEvent, tags: str) -> None:
         if not tags:
             tags = "random"
         img_info = {}
         await evt.mark_read()
         
-        img_info = await self.get_tenor(evt, tags)
+        img_info = await self.get_klipy(evt, tags)
 
         await self.send_msg(evt, img_info)
 
