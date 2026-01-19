@@ -1,6 +1,7 @@
 # gifme - a maubot plugin to overcome the fact that giphy kinda sucks
 
 from typing import Awaitable, Type, Optional, Tuple
+import asyncio
 import re
 import random
 import urllib.parse
@@ -12,6 +13,19 @@ from mautrix.types import (Event, MessageType, EventID, UserID, FileInfo, EventT
 from mautrix.util.config import BaseProxyConfig, ConfigUpdateHelper
 from maubot import Plugin, MessageEvent
 from maubot.handlers import command, event
+
+# Optional: for decrypting images in encrypted rooms
+try:
+    from mautrix.types import EncryptedEvent
+except ImportError:
+    class _EncryptedEventPlaceholder:
+        pass
+    EncryptedEvent = _EncryptedEventPlaceholder  # isinstance never matches
+
+try:
+    from mautrix.crypto.attachments import decrypt_attachment
+except ImportError:
+    decrypt_attachment = None
 
 # database table related things
 from .db import upgrade_table
@@ -26,10 +40,9 @@ class Config(BaseProxyConfig):
         helper.copy("giphy_api_key")
         helper.copy("klipy_api_key")
         helper.copy("allow_non_files")
-        helper.copy("say_already_saved")
-        helper.copy("be_subtle")
         helper.copy("restrict_users")
         helper.copy("allowed_users")
+        helper.copy("decryption_for_save")
 
 
 class GifMe(Plugin):
@@ -264,6 +277,41 @@ class GifMe(Plugin):
         return orig
 
 
+    async def _decrypt_event_if_needed(self, evt):
+        """If evt is EncryptedEvent and decryption_for_save is on, decrypt and return the event to use."""
+        if not isinstance(evt, EncryptedEvent):
+            return evt
+        if not self.config.get("decryption_for_save"):
+            return None
+        crypto = getattr(self.client, "crypto", None)
+        if not crypto:
+            return None
+        decrypted = None
+        if hasattr(self.client, "decrypt_event"):
+            try:
+                d = self.client.decrypt_event(evt)
+                decrypted = await d if asyncio.iscoroutine(d) else d
+            except Exception as e:
+                self.log.debug("decrypt_event failed: %s", e)
+        if decrypted is None:
+            for name in ("decrypt_megolm_event", "decrypt"):
+                fn = getattr(crypto, name, None)
+                if not fn:
+                    continue
+                try:
+                    d = fn(evt)
+                    decrypted = await d if asyncio.iscoroutine(d) else d
+                    break
+                except Exception as e:
+                    self.log.debug("crypto.%s failed: %s", name, e)
+        return decrypted
+
+    async def _download_media(self, mxc_or_url: str) -> bytes:
+        """Download media from mxc URL. Requires client.download_media (mautrix with crypto)."""
+        if hasattr(self.client, "download_media"):
+            return await self.client.download_media(mxc_or_url)
+        raise RuntimeError("client.download_media not available")
+
     async def save_msg(
         self, source_evt: MessageEvent, saver: UserID, tags: str = "", silent: bool = False
     ) -> Optional[str]:
@@ -272,14 +320,62 @@ class GifMe(Plugin):
         if not tags:
             tags = ""
 
+        # Decrypt encrypted events when decryption_for_save is enabled
+        if isinstance(source_evt, EncryptedEvent):
+            dec = await self._decrypt_event_if_needed(source_evt)
+            if dec is None:
+                await source_evt.reply(
+                    "sorry, that message is encrypted and i can't decrypt it."
+                )
+                return None
+            source_evt = dec
+
         ## fetch our replied-to event contents
         if source_evt.content.msgtype in (MessageType.IMAGE, MessageType.VIDEO):
-            message_info["original"] = source_evt.content.url
-            message_info["filename"] = source_evt.content.body
-            message_info["mimetype"] = source_evt.content.info.mimetype
-            message_info["height"] = source_evt.content.info.height
-            message_info["width"] = source_evt.content.info.width
-            message_info["size"] = source_evt.content.info.size
+            content = source_evt.content
+            enc_file = getattr(content, "file", None)
+            if (
+                enc_file
+                and getattr(enc_file, "key", None) is not None
+                and decrypt_attachment is not None
+            ):
+                try:
+                    ciphertext = await self._download_media(enc_file.url)
+                    # EncryptedFile.key is a key object; .key is the raw key (maubot-hateheif uses file.key.key)
+                    key_material = getattr(enc_file.key, "key", enc_file.key)
+                    hashes = getattr(enc_file, "hashes", None) or {}
+                    h = hashes.get("sha256") if isinstance(hashes, dict) else getattr(hashes, "sha256", None)
+                    if h is None and hashes:
+                        try:
+                            h = hashes["sha256"]
+                        except (KeyError, TypeError):
+                            pass
+                    plaintext = decrypt_attachment(
+                        ciphertext, key_material, h, enc_file.iv
+                    )
+                    info = getattr(content, "info", None) or type("_", (), {})()
+                    mime = getattr(info, "mimetype", None) or "image/png"
+                    body = getattr(content, "body", None) or "image"
+                    new_mxc = await self.client.upload_media(
+                        plaintext, mime_type=mime, filename=body
+                    )
+                    message_info["original"] = new_mxc
+                    message_info["filename"] = body
+                    message_info["mimetype"] = mime
+                    message_info["height"] = getattr(info, "height", None)
+                    message_info["width"] = getattr(info, "width", None)
+                    message_info["size"] = getattr(info, "size", None)
+                except Exception as e:
+                    self.log.warning("Failed to decrypt media: %s", e)
+                    await source_evt.reply("sorry, i couldn't decrypt the file.")
+                    return None
+            else:
+                message_info["original"] = content.url
+                message_info["filename"] = content.body
+                message_info["mimetype"] = content.info.mimetype
+                message_info["height"] = content.info.height
+                message_info["width"] = content.info.width
+                message_info["size"] = content.info.size
 
         elif source_evt.content.msgtype == MessageType.TEXT:
             if self.config["allow_non_files"] == False:
@@ -355,14 +451,9 @@ class GifMe(Plugin):
                     return None
             else:
                 if not silent:
-                    if self.config["say_already_saved"]:
-                        await source_evt.reply(
-                            f"{saver} reading comprehension grade: 🇫"
-                        )
-                    else:
-                        await source_evt.reply(
-                            "It looks like this is already saved with these tags."
-                        )
+                    await source_evt.reply(
+                        f"{saver} reading comprehension grade: 🇫"
+                    )
                 return "already_saved"
         else:
             saved_tags = await self.store_msg(message_info, tags)
@@ -484,14 +575,8 @@ class GifMe(Plugin):
                 "Powered by GIPHY" if msg_info.get("source") == "giphy" else "Powered by KLIPY",
             )
             await self.client.react(evt.room_id, my_msg, "💾 SAVE?")
-        elif self.config["say_already_saved"] and self.config["fallback_threshold"] > 0:
-            if self.config["be_subtle"]:
-                await self.client.react(evt.room_id, my_msg, "🗃️")
-            else:
-                await evt.respond(
-                    "<em>i found this in my personal archives, you don't need to save it again.</em>",
-                    allow_html=True,
-                )
+        elif self.config["fallback_threshold"] > 0:
+            await self.client.react(evt.room_id, my_msg, "🗃️ from my archives")
 
 
     @gifme.subcommand("giphy", help="use giphy to search for a gif without using the local collection")
@@ -523,6 +608,27 @@ class GifMe(Plugin):
         await self.client.react(evt.room_id, my_msg, "Powered by KLIPY")
         await self.client.react(evt.room_id, my_msg, "💾 SAVE?")
 
+
+    @command.passive(
+        regex=r"^💾$",
+        field=lambda evt: evt.content.relates_to.key,
+        event_type=EventType.REACTION,
+        msgtypes=None,
+    )
+    async def save_react_floppy(self, evt: ReactionEvent, key: Tuple[str]) -> None:
+        """React with 💾 only to save any message (uses filename-derived tags when no tags)."""
+        source_evt = await self.client.get_event(
+            evt.room_id, evt.content.relates_to.event_id
+        )
+        if self.config["restrict_users"] and evt.sender not in self.config.get(
+            "allowed_users", []
+        ):
+            await source_evt.reply(
+                f"{evt.sender} reacted with the save emoji, but is not allowed "
+                "to save things to my database."
+            )
+            return
+        await self.save_msg(source_evt, saver=evt.sender, tags="")
 
     @command.passive(
         regex=r"^💾 SAVE\?$",

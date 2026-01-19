@@ -19,18 +19,14 @@ klipy_api_key: ""
 ## allow saving messages in plain-text to the database? security risk for encrypted rooms!
 allow_non_files: true
 
-## send a message with every image returned from the database?
-## this informs people that the response is already saved and does not need to be saved again
-say_already_saved: false
-
-## use emojis to indicate saved status instead of text messages? messages returned from the internal database will
-## immediately include the card-box emoji reaction to indicate they are from archives. fallback images from
-## tenor/giphy will have a spider-web emoji reaction to indicate they are from the web.
-be_subtle: true
-
 ## define a list of users who can save messages to the database?
 restrict_users: false
 
 allowed_users:
   - "@user1:server.tld"
   - "@user2:server.tld"
+
+## try to decrypt image/file events in encrypted rooms when saving? requires mautrix
+## crypto (e2ee). decrypted media is re-uploaded unencrypted to the homeserver and
+## stored/resent as plain mxc. set to true to allow saving from encrypted rooms.
+decryption_for_save: false
