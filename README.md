@@ -1,70 +1,64 @@
 # gifme
 [![Chat on Matrix](https://img.shields.io/badge/chat_on_matrix-%23dev:mssj.me-green)](https://matrix.to/#/#dev:mssj.me)
 
-NOTE: this bot has only been tested, and is assumed to only work, using SQLite as the plugin database.
+A maubot plugin that saves gifs, memes, or optionally any other message, associates tags with it, and returns a random match when those tags are used. Written because GIPHY has gone downhill and a private collection is more reliable for a community’s expectations.
 
-a maubot plugin that saves gifs, memes, or optionally anything else someone has posted, associate tags with it, and then
-return it when those tags are called. written because frankly, giphy has gone downhill and a private collection is more
-reliable when it comes to a community's expectations of what the reaction should be.
+NOTE: this bot has only been tested with SQLite as the plugin database engine. it theoretically now has PostgreSQL support added but it is untested. please let me know if it works!
 
-add a giphy api key or a tenor api (v2 only!) api key to the config for fallback to these external gif libraries.
+**Fallback:** when the local database has no (or too few) hits, the bot can fall back to **GIPHY** or **Klipy**. Add the relevant API key(s) in config. **Tenor is no longer supported.** Google acquired Tenor and later deprecated the public Tenor API with the kind of opaque deprecation notice that’s become typical og Google. We’ve switched to [Klipy](https://klipy.com) as the alternative, which offers a Tenor-compatible API.
 
-## installation
+The plugin works with **PostgreSQL** (untested, see note above) or **SQLite**.
 
-install like any other maubot plugin: either create a `.zip` file of this repository and upload it, or use `mbc build`
-commands to generate and upload a package to your maubot server.
+---
 
-## commands
+## Installation
 
-`!gifme <phrase>` will make the bot respond with a randomly selected gif that matches that phrase. optionally, if no
-entries have been stored for that phrase, will fall back to posting something from a giphy or tenor search.
+Install like any other maubot plugin: create a `.zip` of this repository and upload it, or use `mbc build` to generate and upload a package to your maubot server.
 
-`!gifme giphy <phrase>` will skip looking up internally and just go right to returning a result from giphy. this enables
-you to force fallback without needing to set the plugin to do so all the time.
+---
 
-`!gifme tenor <phrase>` will skip looking up internally and just go right to returning a result from tenor. this enables
-you to force fallback without needing to set the plugin to do so all the time.
+## Commands
 
-`!gifme save <phrase>` should be used in reply to a message in order to save it to the database and tag it with the
-phrase or words given. tags are stored as text entries in the sqlite database, and returned with full-text search
-queries so no need to get too crazy about quotes or separation. _NOTE: if the image is already stored in the database
-the command will update the tags for the existing image, minus any duplicate words. This effectively enables you to add
-more tags to an entry._
+| Command | Description |
+|--------|-------------|
+| `!gifme <phrase>` | Return a random image that matches the phrase. Prefers the local database; falls back to GIPHY or Klipy if enabled and the DB has too few results. |
+| `!gifme giphy <phrase>` | Skip the DB and fetch directly from GIPHY. |
+| `!gifme klipy <phrase>` | Skip the DB and fetch directly from Klipy. |
+| `!gifme save <phrase>` | In **reply** to a message: save it and tag it with the phrase. If it’s already stored, new tags are merged and duplicates ignored. |
+| `!gifme tags` | In **reply** to a message the bot sent: show the tags for that stored entry. |
+| `!gifme delete` | In **reply** to a message the bot sent: remove that entry from the database. |
 
-alternatively, you can automatically save a message to the database using either its filename or message contents as
-tags by using the 💾 emoji reaction on the message!
+---
 
-`!gifme tags` should be used in a reply to a message sent by the bot to show all tags associated with the image.
+## Reactions and saving
 
-## config
+### Saving with reactions
 
-`command_aliases`: a list of aliases the command should respond to. the first entry will be used as the default command,
-but all commands will elicit a bot response. may be useful if you want it to act as a drop-in replacement for a
-different command that people are already used to, like `giphy`.
+- **💾 (floppy only)** on **any** message: save that message. Tags are taken from the filename (for media) or the body (for text). Subject to `restrict_users` / `allowed_users` if set.
 
-`allow_fallback`: enables the ability for gifme to return a result from either giphy or tenor if no suitable option is
-found internally. requires that a giphy or tenor api key is added, otherwise fallback will return an error. set to
-either `giphy` or `tenor`. leave blank if you want to disallow fallback behavior.
+- **💾 SAVE?** on a **bot** message that came from GIPHY or Klipy: save that image with filename‑derived tags. The bot replies with a **✅ SAVED!** reaction when it’s done. Further **💾 SAVE?** on the same message are ignored.
 
-`fallback_threshold`: the number of results that need to be returned from the internal database before falling back to a
-giphy search. for example, if set to `2`, there must be at least two entries in the internal database returned, and if
-there are not the bot will search giphy. set to `0` to force fallback at all times and effectively make the bot function
-purely as a giphy bot. default value is 1, so if there is something in your database, it will be returned otherwise
-fallback.
+### What the bot adds to its own messages
 
-`giphy_api_key`: an api key to authenticate against the giphy api endpoint. optional, only used for fallback behavior.
+- **From GIPHY:** reactions `Powered by GIPHY` and `💾 SAVE?` (attribution and a one‑click save).
+- **From Klipy:** reactions `Powered by KLIPY` and `💾 SAVE?`.
+- **From the local DB:** reaction `🗃️ from my archives` so it’s clear the image was already saved.
 
-`tenor_api_key`: an api key to authenticate against the tenor api endpoint. optional, only used for fallback behavior.
+---
 
-`allow_non_files`: whether to enable storing and returning messages which are not file-uploads. this effectively enables
-the bot to function as a message bookmark system, which may be useful in scenarios where the same message is regularly
-posted and you want a shortcut to it, you want to return someone's message out-of-context for comedic purposes, etc.
-this will return the message as quoted text, with the original sender's matrix ID and the date as the source. set to
-either `true` or `false`. *WARNING! this will store the content of the message as plain-text in the database, as well as
-the sender of that message, even for messages sent in encrypted rooms. DO NOT ENABLE THIS IF YOU ARE CONCERNED ABOUT PRIVACY.*
+## Config
 
-`restrict_users`: whether to restrict tagging and storing permissions to a list of users. set to either `true` or
-`false`.
+| Option | Description |
+|--------|-------------|
+| `command_aliases` | List of command names. The first is the main one (e.g. `gifme`, `gif`). |
+| `allow_fallback` | Fallback when the DB has too few hits: `giphy`, `klipy`, or blank to disable. |
+| `fallback_threshold` | Minimum number of DB matches before using fallback. `0` = always use fallback (GIPHY/Klipy only). Default `1`. |
+| `giphy_api_key` | GIPHY API key; needed if `allow_fallback` is `giphy`. |
+| `klipy_api_key` | [Klipy](https://klipy.com) API key; needed if `allow_fallback` is `klipy`. |
+| `allow_non_files` | Allow saving and returning plain‑text messages (quoted, with sender). *Privacy:* this stores body and sender in the DB even in encrypted rooms. |
+| `restrict_users` | If `true`, only `allowed_users` can save (commands and 💾 / 💾 SAVE? reactions). |
+| `allowed_users` | List of Matrix IDs allowed to save when `restrict_users` is `true`. |
+| `decryption_for_save` | If `true`, the bot will decrypt image events in encrypted rooms when saving. Decrypted files are re‑uploaded **unencrypted** to the homeserver and stored/resent as normal. Requires mautrix crypto (E2EE). Default `false`. |
 
-`allowed_users`: list of users who should be allowed to save and tag messages. optional, ignored if `restrict_users` is
-set to `false`. set to a yaml list (`[]`).
+---
+
