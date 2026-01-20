@@ -62,7 +62,43 @@ class GifMe(Plugin):
         sani = re.sub(r'(_|-|\.)', ' ', sani) # substitute common delimiters with normal spaces
         sani = re.sub(r'[^a-zA-Z0-9\s]', '', sani).lower() # strip out any other special characters and make lowercase
         return sani
-        
+
+    def _mimetype_to_suffix(self, mimetype: Optional[str]) -> str:
+        """Map mimetype to a file suffix. Default .bin for unknown."""
+        if not mimetype:
+            return ".bin"
+        m = (mimetype or "").strip().lower()
+        return {
+            "image/webp": ".webp",
+            "image/gif": ".gif",
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/jpg": ".jpg",
+            "image/svg+xml": ".svg",
+            "video/mp4": ".mp4",
+            "video/webm": ".webm",
+        }.get(m, ".bin")
+
+    def _resolve_filename_for_media(self, content) -> str:
+        """
+        Resolve a filename for image/video content. Matrix uses body for captions
+        now; prefer an explicit filename, else treat body as caption and derive.
+        - If content.filename is set: use as-is.
+        - Else if body ends in a suffix matching the mimetype: use body as-is.
+        - Else: sanitize body and append the mimetype-derived suffix.
+        """
+        explicit = getattr(content, "filename", None)
+        if explicit and str(explicit).strip():
+            return str(explicit).strip()
+        body = getattr(content, "body", None) or ""
+        info = getattr(content, "info", None)
+        mime = getattr(info, "mimetype", None) if info else None
+        suffix = self._mimetype_to_suffix(mime)
+        if body and suffix and body.lower().endswith(suffix.lower()):
+            return body
+        base = self.sanistring(body) or "image"
+        return base + suffix
+
     async def get_giphy(self, evt: MessageEvent, query: str) -> None:
 
         #query = query.replace('"', '') # remove quotes to pass raw terms to giphy
@@ -355,12 +391,12 @@ class GifMe(Plugin):
                     )
                     info = getattr(content, "info", None) or type("_", (), {})()
                     mime = getattr(info, "mimetype", None) or "image/png"
-                    body = getattr(content, "body", None) or "image"
+                    filename = self._resolve_filename_for_media(content)
                     new_mxc = await self.client.upload_media(
-                        plaintext, mime_type=mime, filename=body
+                        plaintext, mime_type=mime, filename=filename
                     )
                     message_info["original"] = new_mxc
-                    message_info["filename"] = body
+                    message_info["filename"] = filename
                     message_info["mimetype"] = mime
                     message_info["height"] = getattr(info, "height", None)
                     message_info["width"] = getattr(info, "width", None)
@@ -371,7 +407,7 @@ class GifMe(Plugin):
                     return None
             else:
                 message_info["original"] = content.url
-                message_info["filename"] = content.body
+                message_info["filename"] = self._resolve_filename_for_media(content)
                 message_info["mimetype"] = content.info.mimetype
                 message_info["height"] = content.info.height
                 message_info["width"] = content.info.width
@@ -482,6 +518,7 @@ class GifMe(Plugin):
                         size=info["size"],
                     ),
                 )
+                content["filename"] = info["filename"]
                 content["org.jobmachine.gifme.mxorig"] = info["original"]
                 if info.get("source") in ("giphy", "klipy"):
                     content["org.jobmachine.gifme.source"] = info["source"]
