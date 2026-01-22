@@ -287,18 +287,56 @@ class GifMe(Plugin):
 
     async def get_all_entries(self, tags: str) -> list:
         tags = self.sanistring(tags)
+        if not tags:
+            return []
+        
+        # Split into words for all-words matching
+        words = [w for w in tags.split() if w]
+        if not words:
+            return []
+        
+        results = []
+        seen_ids = set()
+        
+        # Try exact phrase match first (best rank = 1)
         try:
-            rows = await self.database.fetch(
-                """SELECT * FROM entries
-                   WHERE to_tsvector('english', COALESCE(tags, '')) @@ plainto_tsquery('english', $1)""",
+            exact_rows = await self.database.fetch(
+                """SELECT *, 1 as _rank FROM entries
+                   WHERE LOWER(COALESCE(tags, '')) LIKE LOWER('%' || $1 || '%')""",
                 tags,
             )
+            for row in exact_rows:
+                row_id = self._row_get(row, "id")
+                if row_id not in seen_ids:
+                    seen_ids.add(row_id)
+                    results.append(row)
         except Exception:
-            rows = await self.database.fetch(
-                "SELECT * FROM entries WHERE COALESCE(tags, '') LIKE '%' || $1 || '%'",
-                tags,
-            )
-        return rows
+            pass
+        
+        # Try all-words match (good rank = 2) - only if multiple words
+        # For single word, exact phrase and all-words are the same, so skip
+        # Use LIKE-only for all-words (both SQLite and PostgreSQL): order-independent,
+        # no FTS stemmer quirks. Each word must appear in tags, but not adjacent.
+        if len(words) > 1:
+            try:
+                conditions = " AND ".join([
+                    f"LOWER(COALESCE(tags, '')) LIKE ${i+1}"
+                    for i in range(len(words))
+                ])
+                params = [f"%{w}%" for w in words]
+                query = f"SELECT *, 2 as _rank FROM entries WHERE {conditions}"
+                all_words_rows = await self.database.fetch(query, *params)
+                for row in all_words_rows:
+                    row_id = self._row_get(row, "id")
+                    if row_id not in seen_ids:
+                        seen_ids.add(row_id)
+                        results.append(row)
+            except Exception:
+                pass
+        
+        # Sort by rank (1 = exact phrase, 2 = all-words)
+        results.sort(key=lambda r: self._row_get(r, "_rank", 999))
+        return results
 
     async def get_row(self, original: str):
         return await self.database.fetchrow(
@@ -588,7 +626,11 @@ class GifMe(Plugin):
                         msg_info = await self.get_klipy(evt, tags)
                         fallback_status = 1
                 else:
-                    chosen = random.choice(entries)
+                    # Get the best rank (first entry has the best rank since results are sorted)
+                    best_rank = self._row_get(entries[0], "_rank", 999) if entries else 999
+                    # Filter to only entries with the best rank (rotate among equally top-ranked matches)
+                    best_tier = [e for e in entries if self._row_get(e, "_rank", 999) == best_rank]
+                    chosen = random.choice(best_tier)
                     msg_info = self.row_to_info(chosen)
             else:
                 if self.config["allow_fallback"].lower() == "giphy":
