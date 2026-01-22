@@ -611,7 +611,9 @@ class GifMe(Plugin):
                 my_msg,
                 "Powered by GIPHY" if msg_info.get("source") == "giphy" else "Powered by KLIPY",
             )
-            await self.client.react(evt.room_id, my_msg, "💾 SAVE?")
+            # only ask to save if we actually are configured to pull from archives
+            if self.config["fallback_threshold"] > 0:
+                await self.client.react(evt.room_id, my_msg, "💾 SAVE?")
         elif self.config["fallback_threshold"] > 0:
             await self.client.react(evt.room_id, my_msg, "🗃️ from my archives")
 
@@ -628,7 +630,9 @@ class GifMe(Plugin):
             return
         my_msg = await self.send_msg(evt, img_info)
         await self.client.react(evt.room_id, my_msg, "Powered by GIPHY")
-        await self.client.react(evt.room_id, my_msg, "💾 SAVE?")
+        # only ask to save if we actually are configured to pull from archives
+        if self.config["fallback_threshold"] > 0:
+            await self.client.react(evt.room_id, my_msg, "💾 SAVE?")
 
 
     @gifme.subcommand("klipy", help="use klipy to search for a gif without using the local collection")
@@ -643,7 +647,9 @@ class GifMe(Plugin):
             return
         my_msg = await self.send_msg(evt, img_info)
         await self.client.react(evt.room_id, my_msg, "Powered by KLIPY")
-        await self.client.react(evt.room_id, my_msg, "💾 SAVE?")
+        # only ask to save if we actually are configured to pull from archives
+        if self.config["fallback_threshold"] > 0:
+            await self.client.react(evt.room_id, my_msg, "💾 SAVE?")
 
 
     @command.passive(
