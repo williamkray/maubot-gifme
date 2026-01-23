@@ -562,6 +562,8 @@ class GifMe(Plugin):
                     content["org.jobmachine.gifme.source"] = info["source"]
                 if info.get("query"):
                     content["org.jobmachine.gifme.query"] = info["query"]
+                if info.get("original_sender"):
+                    content["org.jobmachine.gifme.original_sender"] = info["original_sender"]
                 return content
             except Exception:
                 self.log.error("mimetype not supported: %s", info.get("mimetype"))
@@ -644,8 +646,9 @@ class GifMe(Plugin):
                     best_tier = [e for e in entries if self._row_get(e, "_rank", 999) == best_rank]
                     chosen = random.choice(best_tier)
                     msg_info = self.row_to_info(chosen)
-                    # Store the query for RETRY functionality
+                    # Store the query and original sender for RETRY functionality
                     msg_info["query"] = tags
+                    msg_info["original_sender"] = str(evt.sender)
             else:
                 if self.config["allow_fallback"].lower() == "giphy":
                     msg_info = await self.get_giphy(evt, tags)
@@ -659,8 +662,9 @@ class GifMe(Plugin):
 
         if msg_info is None:
             return
-        # Store the query for RETRY functionality
+        # Store the query and original sender for RETRY functionality
         msg_info["query"] = tags
+        msg_info["original_sender"] = str(evt.sender)
         my_msg = await self.send_msg(evt, msg_info)
 
         if msg_info.get("source") in ("giphy", "klipy"):
@@ -671,7 +675,7 @@ class GifMe(Plugin):
             )
             # only ask to save if we actually are configured to pull from archives
             if self.config["fallback_threshold"] > 0:
-                await self.client.react(evt.room_id, my_msg, "💾 SAVE?")
+                await self.client.react(evt.room_id, my_msg, "💾 SAVE")
         elif self.config["fallback_threshold"] > 0:
             await self.client.react(evt.room_id, my_msg, "🗃️ from my archives")
         # Add RETRY reaction to all images
@@ -692,7 +696,7 @@ class GifMe(Plugin):
         await self.client.react(evt.room_id, my_msg, "Powered by GIPHY")
         # only ask to save if we actually are configured to pull from archives
         if self.config["fallback_threshold"] > 0:
-            await self.client.react(evt.room_id, my_msg, "💾 SAVE?")
+            await self.client.react(evt.room_id, my_msg, "💾 SAVE")
 
 
     @gifme.subcommand("klipy", help="use klipy to search for a gif without using the local collection")
@@ -705,13 +709,14 @@ class GifMe(Plugin):
         img_info = await self.get_klipy(evt, tags)
         if not img_info:
             return
-        # Store the query for RETRY functionality
+        # Store the query and original sender for RETRY functionality
         img_info["query"] = tags
+        img_info["original_sender"] = str(evt.sender)
         my_msg = await self.send_msg(evt, img_info)
         await self.client.react(evt.room_id, my_msg, "Powered by KLIPY")
         # only ask to save if we actually are configured to pull from archives
         if self.config["fallback_threshold"] > 0:
-            await self.client.react(evt.room_id, my_msg, "💾 SAVE?")
+            await self.client.react(evt.room_id, my_msg, "💾 SAVE")
         # Add RETRY reaction to all images
         await self.client.react(evt.room_id, my_msg, "♻️ RETRY")
 
@@ -738,7 +743,7 @@ class GifMe(Plugin):
         await self.save_msg(source_evt, saver=evt.sender, tags="")
 
     @command.passive(
-        regex=r"^💾 SAVE\?$",
+        regex=r"^💾 SAVE$",
         field=lambda evt: evt.content.relates_to.key,
         event_type=EventType.REACTION,
         msgtypes=None,
@@ -790,10 +795,16 @@ class GifMe(Plugin):
         if source_evt.sender != self.client.mxid:
             return
         
-        # Get the query from the message content
+        # Get the query and original sender from the message content
         query = source_evt.content.get("org.jobmachine.gifme.query")
         if not query:
             # If no query stored, we can't retry
+            return
+        
+        # Only allow RETRY from the person who sent the original query
+        original_sender = source_evt.content.get("org.jobmachine.gifme.original_sender")
+        if original_sender and str(evt.sender) != original_sender:
+            # Not the original sender, ignore the reaction
             return
         
         # Redact the original message
@@ -860,9 +871,13 @@ class GifMe(Plugin):
         if msg_info is None:
             return
         
-        # Store the query for RETRY functionality
+        # Store the query and original sender for RETRY functionality
+        # Preserve the original sender from the message being retried
         if "query" not in msg_info:
             msg_info["query"] = query
+        if "original_sender" not in msg_info:
+            # Use the original sender from the message being retried, not the person who reacted
+            msg_info["original_sender"] = original_sender or str(evt.sender)
         
         # Send the new message directly to the room (not as a reply)
         my_msg = await self.send_msg_to_room(evt.room_id, msg_info)
@@ -875,7 +890,7 @@ class GifMe(Plugin):
                 "Powered by GIPHY" if msg_info.get("source") == "giphy" else "Powered by KLIPY",
             )
             if self.config["fallback_threshold"] > 0:
-                await self.client.react(evt.room_id, my_msg, "💾 SAVE?")
+                await self.client.react(evt.room_id, my_msg, "💾 SAVE")
         elif self.config["fallback_threshold"] > 0:
             await self.client.react(evt.room_id, my_msg, "🗃️ from my archives")
         
