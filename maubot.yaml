@@ -1,6 +1,6 @@
 maubot: 0.4.0
 id: org.jobmachine.gifme
-version: 1.0.1
+version: 1.0.2
 license: MIT
 modules:
   - gifme

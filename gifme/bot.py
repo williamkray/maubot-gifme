@@ -540,8 +540,8 @@ class GifMe(Plugin):
 
 
 
-    async def send_msg(self, evt: MessageEvent, info: dict) -> EventID:
-
+    def _build_content(self, info: dict):
+        """Build message content from info dict."""
         if info["original"].startswith("mxc"):
             try:
                 msgtype = re.match(r"^(image|video)\/.+", info["mimetype"]).group(1)
@@ -560,6 +560,9 @@ class GifMe(Plugin):
                 content["org.jobmachine.gifme.mxorig"] = info["original"]
                 if info.get("source") in ("giphy", "klipy"):
                     content["org.jobmachine.gifme.source"] = info["source"]
+                if info.get("query"):
+                    content["org.jobmachine.gifme.query"] = info["query"]
+                return content
             except Exception:
                 self.log.error("mimetype not supported: %s", info.get("mimetype"))
                 raise
@@ -581,8 +584,17 @@ class GifMe(Plugin):
                 formatted_body=formatted,
             )
             content["org.jobmachine.gifme.mxorig"] = info["original"]
+            return content
 
+    async def send_msg(self, evt: MessageEvent, info: dict) -> EventID:
+        content = self._build_content(info)
         msg_id = await evt.respond(content=content, allow_html=True)
+        return msg_id
+
+    async def send_msg_to_room(self, room_id: RoomID, info: dict) -> EventID:
+        """Send a message directly to a room without replying."""
+        content = self._build_content(info)
+        msg_id = await self.client.send_message(room_id, content)
         return msg_id
 
     @command.new(name=get_command_name, aliases=is_alias, help="save and tag, or return, message contents", require_subcommand=False,
@@ -632,6 +644,8 @@ class GifMe(Plugin):
                     best_tier = [e for e in entries if self._row_get(e, "_rank", 999) == best_rank]
                     chosen = random.choice(best_tier)
                     msg_info = self.row_to_info(chosen)
+                    # Store the query for RETRY functionality
+                    msg_info["query"] = tags
             else:
                 if self.config["allow_fallback"].lower() == "giphy":
                     msg_info = await self.get_giphy(evt, tags)
@@ -645,6 +659,8 @@ class GifMe(Plugin):
 
         if msg_info is None:
             return
+        # Store the query for RETRY functionality
+        msg_info["query"] = tags
         my_msg = await self.send_msg(evt, msg_info)
 
         if msg_info.get("source") in ("giphy", "klipy"):
@@ -658,6 +674,8 @@ class GifMe(Plugin):
                 await self.client.react(evt.room_id, my_msg, "💾 SAVE?")
         elif self.config["fallback_threshold"] > 0:
             await self.client.react(evt.room_id, my_msg, "🗃️ from my archives")
+        # Add RETRY reaction to all images
+        await self.client.react(evt.room_id, my_msg, "♻️ RETRY")
 
 
     @gifme.subcommand("giphy", help="use giphy to search for a gif without using the local collection")
@@ -687,11 +705,15 @@ class GifMe(Plugin):
         img_info = await self.get_klipy(evt, tags)
         if not img_info:
             return
+        # Store the query for RETRY functionality
+        img_info["query"] = tags
         my_msg = await self.send_msg(evt, img_info)
         await self.client.react(evt.room_id, my_msg, "Powered by KLIPY")
         # only ask to save if we actually are configured to pull from archives
         if self.config["fallback_threshold"] > 0:
             await self.client.react(evt.room_id, my_msg, "💾 SAVE?")
+        # Add RETRY reaction to all images
+        await self.client.react(evt.room_id, my_msg, "♻️ RETRY")
 
 
     @command.passive(
@@ -753,8 +775,112 @@ class GifMe(Plugin):
             self._saved_reaction_event_ids.add(key_saved)
             await self.client.react(evt.room_id, target_id, "✅ SAVED!")
 
-
-
+    @command.passive(
+        regex=r"^♻️ RETRY$",
+        field=lambda evt: evt.content.relates_to.key,
+        event_type=EventType.REACTION,
+        msgtypes=None,
+    )
+    async def retry_react(self, evt: ReactionEvent, key: Tuple[str]) -> None:
+        """React with ♻️ RETRY to redact the message and retry the search with the same query."""
+        target_id = evt.content.relates_to.event_id
+        source_evt = await self.client.get_event(evt.room_id, target_id)
+        
+        # Only process reactions to messages sent by the bot
+        if source_evt.sender != self.client.mxid:
+            return
+        
+        # Get the query from the message content
+        query = source_evt.content.get("org.jobmachine.gifme.query")
+        if not query:
+            # If no query stored, we can't retry
+            return
+        
+        # Redact the original message
+        try:
+            await self.client.redact(evt.room_id, target_id)
+        except Exception as e:
+            self.log.warning("Failed to redact message: %s", e)
+            return
+        
+        # Retry the search with the same query
+        # We need to determine the source and retry accordingly
+        source = source_evt.content.get("org.jobmachine.gifme.source")
+        
+        # Create a minimal event-like object for get_giphy/get_klipy error handling
+        # They only use evt.reply() for errors, so we'll handle that separately
+        class FakeEvent:
+            def __init__(self, room_id, plugin):
+                self.room_id = room_id
+                self.plugin = plugin
+            
+            async def reply(self, text):
+                # For errors during retry, just log them
+                self.plugin.log.warning(f"Error during retry: {text}")
+        
+        fake_evt = FakeEvent(evt.room_id, self)
+        
+        # Retry using the same logic as the original search
+        msg_info = {}
+        if source == "giphy":
+            msg_info = await self.get_giphy(fake_evt, query)
+        elif source == "klipy":
+            msg_info = await self.get_klipy(fake_evt, query)
+        else:
+            # Image came from archives - retry with same logic as gifme command
+            if self.config["fallback_threshold"] < 1:
+                # If fallback_threshold < 1, we shouldn't have archives, but handle it anyway
+                if self.config["allow_fallback"].lower() == "giphy":
+                    msg_info = await self.get_giphy(fake_evt, query)
+                elif self.config["allow_fallback"].lower() == "klipy":
+                    msg_info = await self.get_klipy(fake_evt, query)
+            else:
+                entries = await self.get_all_entries(query)
+                
+                if entries:
+                    if len(entries) < self.config["fallback_threshold"]:
+                        if self.config["allow_fallback"].lower() == "giphy":
+                            msg_info = await self.get_giphy(fake_evt, query)
+                        elif self.config["allow_fallback"].lower() == "klipy":
+                            msg_info = await self.get_klipy(fake_evt, query)
+                    else:
+                        # Get the best rank (first entry has the best rank since results are sorted)
+                        best_rank = self._row_get(entries[0], "_rank", 999) if entries else 999
+                        # Filter to only entries with the best rank (rotate among equally top-ranked matches)
+                        best_tier = [e for e in entries if self._row_get(e, "_rank", 999) == best_rank]
+                        chosen = random.choice(best_tier)
+                        msg_info = self.row_to_info(chosen)
+                        msg_info["query"] = query
+                else:
+                    if self.config["allow_fallback"].lower() == "giphy":
+                        msg_info = await self.get_giphy(fake_evt, query)
+                    elif self.config["allow_fallback"].lower() == "klipy":
+                        msg_info = await self.get_klipy(fake_evt, query)
+        
+        if msg_info is None:
+            return
+        
+        # Store the query for RETRY functionality
+        if "query" not in msg_info:
+            msg_info["query"] = query
+        
+        # Send the new message directly to the room (not as a reply)
+        my_msg = await self.send_msg_to_room(evt.room_id, msg_info)
+        
+        # Add reactions as appropriate
+        if msg_info.get("source") in ("giphy", "klipy"):
+            await self.client.react(
+                evt.room_id,
+                my_msg,
+                "Powered by GIPHY" if msg_info.get("source") == "giphy" else "Powered by KLIPY",
+            )
+            if self.config["fallback_threshold"] > 0:
+                await self.client.react(evt.room_id, my_msg, "💾 SAVE?")
+        elif self.config["fallback_threshold"] > 0:
+            await self.client.react(evt.room_id, my_msg, "🗃️ from my archives")
+        
+        # Add RETRY reaction to all images
+        await self.client.react(evt.room_id, my_msg, "♻️ RETRY")
 
     @gifme.subcommand("save", help="save and tag a message to the database")
     @command.argument("tags", pass_raw=True, required=True)
