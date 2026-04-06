@@ -678,8 +678,9 @@ class GifMe(Plugin):
                 await self.client.react(evt.room_id, my_msg, "💾 SAVE")
         elif self.config["fallback_threshold"] > 0:
             await self.client.react(evt.room_id, my_msg, "🗃️ from my archives")
-        # Add RETRY reaction to all images
+        # Add RETRY and TRASH reactions to all images
         await self.client.react(evt.room_id, my_msg, "♻️ RETRY")
+        await self.client.react(evt.room_id, my_msg, "🗑️ TRASH")
 
 
     @gifme.subcommand("giphy", help="use giphy to search for a gif without using the local collection")
@@ -717,8 +718,9 @@ class GifMe(Plugin):
         # only ask to save if we actually are configured to pull from archives
         if self.config["fallback_threshold"] > 0:
             await self.client.react(evt.room_id, my_msg, "💾 SAVE")
-        # Add RETRY reaction to all images
+        # Add RETRY and TRASH reactions to all images
         await self.client.react(evt.room_id, my_msg, "♻️ RETRY")
+        await self.client.react(evt.room_id, my_msg, "🗑️ TRASH")
 
 
     @command.passive(
@@ -894,8 +896,34 @@ class GifMe(Plugin):
         elif self.config["fallback_threshold"] > 0:
             await self.client.react(evt.room_id, my_msg, "🗃️ from my archives")
         
-        # Add RETRY reaction to all images
+        # Add RETRY and TRASH reactions to all images
         await self.client.react(evt.room_id, my_msg, "♻️ RETRY")
+        await self.client.react(evt.room_id, my_msg, "🗑️ TRASH")
+
+    @command.passive(
+        regex=r"^🗑️ TRASH$",
+        field=lambda evt: evt.content.relates_to.key,
+        event_type=EventType.REACTION,
+        msgtypes=None,
+    )
+    async def trash_react(self, evt: ReactionEvent, key: Tuple[str]) -> None:
+        """React with 🗑️ TRASH to silently redact the bot's message."""
+        target_id = evt.content.relates_to.event_id
+        source_evt = await self.client.get_event(evt.room_id, target_id)
+
+        # Only process reactions to messages sent by the bot
+        if source_evt.sender != self.client.mxid:
+            return
+
+        # Only allow TRASH from the person who sent the original query
+        original_sender = source_evt.content.get("org.jobmachine.gifme.original_sender")
+        if original_sender and str(evt.sender) != original_sender:
+            return
+
+        try:
+            await self.client.redact(evt.room_id, target_id)
+        except Exception as e:
+            self.log.warning("Failed to redact message: %s", e)
 
     @gifme.subcommand("save", help="save and tag a message to the database")
     @command.argument("tags", pass_raw=True, required=True)
