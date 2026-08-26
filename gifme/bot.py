@@ -30,6 +30,12 @@ except ImportError:
 # database table related things
 from .db import upgrade_table
 
+# DuckDuckGo has no official API and blocks requests without a realistic browser
+# User-Agent, so we send one on every request (token, i.js, image download). The
+# vqd token is bound to this UA, so it must stay static.
+_DDG_USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+
 
 
 class Config(BaseProxyConfig):
@@ -39,6 +45,9 @@ class Config(BaseProxyConfig):
         helper.copy("fallback_threshold")
         helper.copy("giphy_api_key")
         helper.copy("klipy_api_key")
+        helper.copy("duckduckgo_force_gif")
+        helper.copy("duckduckgo_safesearch")
+        helper.copy("duckduckgo_result_pool")
         helper.copy("allow_non_files")
         helper.copy("restrict_users")
         helper.copy("allowed_users")
@@ -207,6 +216,139 @@ class GifMe(Plugin):
             return None
 
         info["source"] = "klipy"
+        return info
+
+    async def get_duckduckgo(self, evt: MessageEvent, query: str) -> None:
+
+        query = self.sanistring(query)
+        info = {}
+        imgdata = None
+        self.log.debug("duckduckgo: searching for %r (force_gif=%s)", query,
+                       self.config["duckduckgo_force_gif"])
+
+        ## DuckDuckGo has no official API. We first fetch a "vqd" token from the
+        ## HTML page, then use it to query the unofficial i.js JSON endpoint.
+        ## Accept-Language is part of the browser fingerprint DDG's bot blocker
+        ## checks, so send it alongside the User-Agent.
+        ddg_headers = {"User-Agent": _DDG_USER_AGENT, "Accept-Language": "en-US,en;q=0.9"}
+
+        ## step 1: get the vqd token from the image-search page.
+        token_params = urllib.parse.urlencode({"q": query, "iax": "images", "ia": "images"})
+        async with self.http.get(
+            "https://duckduckgo.com/?{}".format(token_params), headers=ddg_headers
+        ) as token_response:
+            if token_response.status != 200:
+                self.log.warning("duckduckgo: token endpoint returned %s", token_response.status)
+                await evt.reply(f"Something went wrong, I got the following response from \
+                            the DuckDuckGo token endpoint: {token_response.status}")
+                return None
+            html = await token_response.text()
+
+        ## the token page embeds vqd="4-123..." (or vqd=4-123... unquoted); it may
+        ## contain letters, so match word characters and hyphens.
+        vqd_match = re.search(r'vqd=["\']?([\w-]+)["\']?', html)
+        if not vqd_match:
+            self.log.warning("duckduckgo: could not extract vqd token (API may have changed)")
+            await evt.reply("Oops, I couldn't get a search token from DuckDuckGo \
+                        (their unofficial API may have changed).")
+            return None
+        vqd = vqd_match.group(1)
+        self.log.debug("duckduckgo: got vqd token %s", vqd)
+
+        ## step 2: query the i.js endpoint with a minimal, browser-like param set
+        ## (extra params trip DDG's bot blocker with a 403).
+        ## the f param is positional: timelimit,size,color,type_image,layout,license
+        ## so forcing gif-typed images puts "type:gif" in the 4th slot; otherwise
+        ## an unfiltered ",,," is sent.
+        force_gif = self.config["duckduckgo_force_gif"]
+        params = {
+            "l": "us-en",
+            "o": "json",
+            "q": query,
+            "vqd": vqd,
+            "f": ",,,type:gif,," if force_gif else ",,,",
+            "p": "1" if self.config["duckduckgo_safesearch"] else "-2",
+        }
+        url_params = urllib.parse.urlencode(params)
+
+        async with self.http.get(
+            "https://duckduckgo.com/i.js?{}".format(url_params),
+            headers={**ddg_headers, "Referer": "https://duckduckgo.com/"},
+        ) as api_response:
+            if api_response.status != 200:
+                self.log.warning("duckduckgo: i.js returned %s", api_response.status)
+                await evt.reply(f"Something went wrong, I got the following response from \
+                            the DuckDuckGo search API: {api_response.status}")
+                return None
+            try:
+                ## DDG serves the JSON under a non-JSON content-type, so bypass the
+                ## aiohttp content-type check.
+                api_data = await api_response.json(content_type=None)
+            except Exception as e:
+                self.log.warning("duckduckgo: could not parse i.js JSON (rate-limited?): %s", e)
+                await evt.reply(f"Oops, I couldn't read the DuckDuckGo search results \
+                            (they may be rate-limiting me): {e}")
+                return None
+
+        ## pick a random gif from the top N relevance-ranked results
+        results = api_data.get("results") or []
+        self.log.debug("duckduckgo: got %d results", len(results))
+        if not results:
+            await evt.reply("i couldn't find anything on DuckDuckGo for that, sorry.")
+            return None
+        try:
+            pool = min(int(self.config["duckduckgo_result_pool"]), len(results))
+            pool = max(pool, 1)
+            picked = random.choice(results[:pool])
+        except Exception as e:
+            await evt.reply(f"Oops, I had an accident trying to pick a Gif from DuckDuckGo: {e}")
+            return None
+
+        ## get the info for the image we've picked. DDG gives no byte size and no
+        ## reliable mimetype, so we guess from the URL and correct after download.
+        gif_link = picked["image"]
+        self.log.debug("duckduckgo: picked image %s", gif_link)
+        info['width'] = int(picked.get('width') or 0) or 480
+        info['height'] = int(picked.get('height') or 0) or 270
+        url_path = urllib.parse.urlparse(gif_link).path.lower()
+        ext_map = {
+            ".gif": "image/gif", ".png": "image/png", ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg", ".webp": "image/webp",
+        }
+        info['mimetype'] = next(
+            (mt for ext, mt in ext_map.items() if url_path.endswith(ext)),
+            "image/gif" if force_gif else "image/jpeg",
+        )
+        info['filename'] = f"{query}{self._mimetype_to_suffix(info['mimetype'])}"
+
+        ## download the image, and upload it to the matrix media repository
+        async with self.http.get(gif_link, headers=ddg_headers) as response:
+            if response.status != 200:
+                await evt.reply(f"Something went wrong, I got the following response when \
+                                downloading the image from DuckDuckGo: {response.status}")
+                return None
+            imgdata = await response.read()
+            content_type = (response.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+
+        ## prefer the real mimetype from the download when it's an image/video
+        if content_type.startswith(("image/", "video/")):
+            info['mimetype'] = content_type
+            info['filename'] = f"{query}{self._mimetype_to_suffix(info['mimetype'])}"
+        if not re.match(r"^(image|video)/.+", info['mimetype']):
+            await evt.reply("DuckDuckGo gave me something that isn't an image, sorry.")
+            return None
+
+        info['size'] = len(imgdata)
+
+        try:
+            info["original"] = await self.client.upload_media(
+                imgdata, mime_type=info["mimetype"], filename=info["filename"]
+            )
+        except Exception as e:
+            await evt.reply(f"Oops, I had an accident uploading my image to matrix: {e}")
+            return None
+
+        info["source"] = "duckduckgo"
         return info
 
     def _row_get(self, row, key, default=None):
@@ -558,7 +700,7 @@ class GifMe(Plugin):
                 )
                 content["filename"] = info["filename"]
                 content["org.jobmachine.gifme.mxorig"] = info["original"]
-                if info.get("source") in ("giphy", "klipy"):
+                if info.get("source") in ("giphy", "klipy", "duckduckgo"):
                     content["org.jobmachine.gifme.source"] = info["source"]
                 if info.get("query"):
                     content["org.jobmachine.gifme.query"] = info["query"]
@@ -588,6 +730,14 @@ class GifMe(Plugin):
             content["org.jobmachine.gifme.mxorig"] = info["original"]
             return content
 
+    def _source_attribution(self, source: str) -> str:
+        """Human-readable attribution reaction for a fallback backend."""
+        return {
+            "giphy": "Powered by GIPHY",
+            "klipy": "Powered by KLIPY",
+            "duckduckgo": "Powered by DuckDuckGo",
+        }.get(source, "Powered by the internet")
+
     async def send_msg(self, evt: MessageEvent, info: dict) -> EventID:
         content = self._build_content(info)
         msg_id = await evt.respond(content=content, allow_html=True)
@@ -611,6 +761,7 @@ class GifMe(Plugin):
                 f"<b>Usage:</b>"
                 f"<p><code>!{self.config['command_aliases'][0]} &lt;phrase&gt;</code>: return a gif matching &lt;phrase&gt;<br />"
                 f"<code>!{self.config['command_aliases'][0]} giphy &lt;phrase&gt;</code>: return a gif from giphy search matching &lt;phrase&gt;<br />"
+                f"<code>!{self.config['command_aliases'][0]} ddg &lt;phrase&gt;</code>: return a gif from duckduckgo search matching &lt;phrase&gt;<br />"
                 f"<code>!{self.config['command_aliases'][0]} save &lt;phrase&gt;</code>: use in reply to a message to save "
                 f"the message contents with &lt;phrase&gt; as tags, or update the existing tags<br />"
                 f"<code>!{self.config['command_aliases'][0]} tags</code>: use in reply to a message i sent "
@@ -627,6 +778,8 @@ class GifMe(Plugin):
                 msg_info = await self.get_giphy(evt, tags)
             elif self.config["allow_fallback"].lower() == "klipy":
                 msg_info = await self.get_klipy(evt, tags)
+            elif self.config["allow_fallback"].lower() == "duckduckgo":
+                msg_info = await self.get_duckduckgo(evt, tags)
             ## skip setting fallback_status so we don't send the fallback message every time, that would get old.
         else:
             entries = await self.get_all_entries(tags)
@@ -638,6 +791,9 @@ class GifMe(Plugin):
                         fallback_status = 1
                     elif self.config["allow_fallback"].lower() == "klipy":
                         msg_info = await self.get_klipy(evt, tags)
+                        fallback_status = 1
+                    elif self.config["allow_fallback"].lower() == "duckduckgo":
+                        msg_info = await self.get_duckduckgo(evt, tags)
                         fallback_status = 1
                 else:
                     # Get the best rank (first entry has the best rank since results are sorted)
@@ -656,6 +812,9 @@ class GifMe(Plugin):
                 elif self.config["allow_fallback"].lower() == "klipy":
                     msg_info = await self.get_klipy(evt, tags)
                     fallback_status = 1
+                elif self.config["allow_fallback"].lower() == "duckduckgo":
+                    msg_info = await self.get_duckduckgo(evt, tags)
+                    fallback_status = 1
                 else:
                     await evt.reply("i couldn't come up with anything, sorry.")
                     return None
@@ -667,11 +826,11 @@ class GifMe(Plugin):
         msg_info["original_sender"] = str(evt.sender)
         my_msg = await self.send_msg(evt, msg_info)
 
-        if msg_info.get("source") in ("giphy", "klipy"):
+        if msg_info.get("source") in ("giphy", "klipy", "duckduckgo"):
             await self.client.react(
                 evt.room_id,
                 my_msg,
-                "Powered by GIPHY" if msg_info.get("source") == "giphy" else "Powered by KLIPY",
+                self._source_attribution(msg_info.get("source")),
             )
             # only ask to save if we actually are configured to pull from archives
             if self.config["fallback_threshold"] > 0:
@@ -723,6 +882,38 @@ class GifMe(Plugin):
         await self.client.react(evt.room_id, my_msg, "🗑️ TRASH")
 
 
+    async def _duckduckgo_cmd(self, evt: MessageEvent, tags: str) -> None:
+        if not tags:
+            tags = "random"
+        await evt.mark_read()
+        img_info = await self.get_duckduckgo(evt, tags)
+        if not img_info:
+            return
+        # Store the query and original sender for RETRY functionality
+        img_info["query"] = tags
+        img_info["original_sender"] = str(evt.sender)
+        my_msg = await self.send_msg(evt, img_info)
+        await self.client.react(evt.room_id, my_msg, "Powered by DuckDuckGo")
+        # only ask to save if we actually are configured to pull from archives
+        if self.config["fallback_threshold"] > 0:
+            await self.client.react(evt.room_id, my_msg, "💾 SAVE")
+        # Add RETRY and TRASH reactions to all images
+        await self.client.react(evt.room_id, my_msg, "♻️ RETRY")
+        await self.client.react(evt.room_id, my_msg, "🗑️ TRASH")
+
+    @gifme.subcommand("duckduckgo", help="use duckduckgo to search for a gif without using the local collection")
+
+    @command.argument("tags", pass_raw=True, required=True)
+    async def duckduckgo(self, evt: MessageEvent, tags: str) -> None:
+        await self._duckduckgo_cmd(evt, tags)
+
+    @gifme.subcommand("ddg", help="alias for the duckduckgo subcommand")
+
+    @command.argument("tags", pass_raw=True, required=True)
+    async def ddg(self, evt: MessageEvent, tags: str) -> None:
+        await self._duckduckgo_cmd(evt, tags)
+
+
     @command.passive(
         regex=r"^💾$",
         field=lambda evt: evt.content.relates_to.key,
@@ -763,7 +954,7 @@ class GifMe(Plugin):
             src = source_evt.content.get("org.jobmachine.gifme.source")
         except (AttributeError, TypeError):
             src = None
-        if src not in ("giphy", "klipy"):
+        if src not in ("giphy", "klipy", "duckduckgo"):
             return
 
         if self.config["restrict_users"] and evt.sender not in self.config.get(
@@ -839,6 +1030,8 @@ class GifMe(Plugin):
             msg_info = await self.get_giphy(fake_evt, query)
         elif source == "klipy":
             msg_info = await self.get_klipy(fake_evt, query)
+        elif source == "duckduckgo":
+            msg_info = await self.get_duckduckgo(fake_evt, query)
         else:
             # Image came from archives - retry with same logic as gifme command
             if self.config["fallback_threshold"] < 1:
@@ -847,15 +1040,19 @@ class GifMe(Plugin):
                     msg_info = await self.get_giphy(fake_evt, query)
                 elif self.config["allow_fallback"].lower() == "klipy":
                     msg_info = await self.get_klipy(fake_evt, query)
+                elif self.config["allow_fallback"].lower() == "duckduckgo":
+                    msg_info = await self.get_duckduckgo(fake_evt, query)
             else:
                 entries = await self.get_all_entries(query)
-                
+
                 if entries:
                     if len(entries) < self.config["fallback_threshold"]:
                         if self.config["allow_fallback"].lower() == "giphy":
                             msg_info = await self.get_giphy(fake_evt, query)
                         elif self.config["allow_fallback"].lower() == "klipy":
                             msg_info = await self.get_klipy(fake_evt, query)
+                        elif self.config["allow_fallback"].lower() == "duckduckgo":
+                            msg_info = await self.get_duckduckgo(fake_evt, query)
                     else:
                         # Get the best rank (first entry has the best rank since results are sorted)
                         best_rank = self._row_get(entries[0], "_rank", 999) if entries else 999
@@ -869,7 +1066,9 @@ class GifMe(Plugin):
                         msg_info = await self.get_giphy(fake_evt, query)
                     elif self.config["allow_fallback"].lower() == "klipy":
                         msg_info = await self.get_klipy(fake_evt, query)
-        
+                    elif self.config["allow_fallback"].lower() == "duckduckgo":
+                        msg_info = await self.get_duckduckgo(fake_evt, query)
+
         if msg_info is None:
             return
         
@@ -885,11 +1084,11 @@ class GifMe(Plugin):
         my_msg = await self.send_msg_to_room(evt.room_id, msg_info)
         
         # Add reactions as appropriate
-        if msg_info.get("source") in ("giphy", "klipy"):
+        if msg_info.get("source") in ("giphy", "klipy", "duckduckgo"):
             await self.client.react(
                 evt.room_id,
                 my_msg,
-                "Powered by GIPHY" if msg_info.get("source") == "giphy" else "Powered by KLIPY",
+                self._source_attribution(msg_info.get("source")),
             )
             if self.config["fallback_threshold"] > 0:
                 await self.client.react(evt.room_id, my_msg, "💾 SAVE")

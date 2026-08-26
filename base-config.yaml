@@ -4,8 +4,9 @@ command_aliases:
   - gifme
   - gif
 
-## enable fallback to giphy/kilpy search? must have appropriate api keys defined below
-## options: giphy klipy
+## enable fallback to giphy/klipy/duckduckgo search? giphy and klipy need an api
+## key defined below; duckduckgo needs none.
+## options: giphy klipy duckduckgo
 ## leave empty to disallow fallback
 allow_fallback: giphy
 
@@ -15,6 +16,18 @@ fallback_threshold: 1
 
 giphy_api_key: ""
 klipy_api_key: ""
+
+## DuckDuckGo image search (unofficial, no API key required — may break if DDG changes).
+## force results to gif-typed images (type:gif filter). NOTE: biases toward GIFs but does
+## not strictly guarantee the gif is animated.
+duckduckgo_force_gif: true
+
+## enable safesearch (strict) for duckduckgo results
+duckduckgo_safesearch: true
+
+## randomly choose from the top N relevance-ranked results. 1 = strict best-match;
+## higher = more variety on repeat / RETRY.
+duckduckgo_result_pool: 5
 
 ## allow saving messages in plain-text to the database? security risk for encrypted rooms!
 allow_non_files: true
