@@ -22,6 +22,11 @@ klipy_api_key: ""
 ## not strictly guarantee the gif is animated.
 duckduckgo_force_gif: true
 
+## preferred image size for duckduckgo results. bigger values avoid tiny thumbnails.
+## options: Small Medium Large Wallpaper
+## leave empty for no size preference (returns a mix of all sizes).
+duckduckgo_size: Medium
+
 ## enable safesearch (strict) for duckduckgo results
 duckduckgo_safesearch: true
 

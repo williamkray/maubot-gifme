@@ -46,6 +46,7 @@ class Config(BaseProxyConfig):
         helper.copy("giphy_api_key")
         helper.copy("klipy_api_key")
         helper.copy("duckduckgo_force_gif")
+        helper.copy("duckduckgo_size")
         helper.copy("duckduckgo_safesearch")
         helper.copy("duckduckgo_result_pool")
         helper.copy("allow_non_files")
@@ -258,15 +259,19 @@ class GifMe(Plugin):
         ## step 2: query the i.js endpoint with a minimal, browser-like param set
         ## (extra params trip DDG's bot blocker with a 403).
         ## the f param is positional: timelimit,size,color,type_image,layout,license
-        ## so forcing gif-typed images puts "type:gif" in the 4th slot; otherwise
-        ## an unfiltered ",,," is sent.
+        ## so forcing gif-typed images puts "type:gif" in the 4th slot, and a size
+        ## preference (Small/Medium/Large/Wallpaper) goes in the 2nd slot. empty
+        ## slots are left blank.
         force_gif = self.config["duckduckgo_force_gif"]
+        size = (self.config["duckduckgo_size"] or "").strip()
+        size_filter = f"size:{size}" if size else ""
+        type_filter = "type:gif" if force_gif else ""
         params = {
             "l": "us-en",
             "o": "json",
             "q": query,
             "vqd": vqd,
-            "f": ",,,type:gif,," if force_gif else ",,,",
+            "f": f",{size_filter},,{type_filter},,",
             "p": "1" if self.config["duckduckgo_safesearch"] else "-2",
         }
         url_params = urllib.parse.urlencode(params)
