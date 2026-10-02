@@ -48,3 +48,12 @@ allowed_users:
 ## crypto (e2ee). decrypted media is re-uploaded unencrypted to the homeserver and
 ## stored/resent as plain mxc. set to true to allow saving from encrypted rooms.
 decryption_for_save: false
+
+## react to a message with one of these keys to run a gif search using that
+## message's text as the query, as if you had sent `!gifme <message text>`.
+## keys may be emoji or text reactions; text matching is case-insensitive.
+## leave the list empty to disable the react-to-search feature.
+react_search_triggers:
+  - "🖼️"
+  - "🎬"
+  - "gif"

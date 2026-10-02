@@ -53,6 +53,7 @@ class Config(BaseProxyConfig):
         helper.copy("restrict_users")
         helper.copy("allowed_users")
         helper.copy("decryption_for_save")
+        helper.copy("react_search_triggers")
 
 
 class GifMe(Plugin):
@@ -60,12 +61,27 @@ class GifMe(Plugin):
     async def start(self) -> None:
         self.config.load_and_update()
         self._saved_reaction_event_ids: set = set()
+        self._gif_trigger_event_ids: set = set()
 
     def get_command_name(self) -> str:
         return self.config["command_aliases"][0]
 
     def is_alias(self, command: str) -> bool:
         return command in self.config["command_aliases"]
+
+    def _is_search_trigger(self, key: str) -> bool:
+        """True if a reaction key matches a configured react_search_triggers entry.
+        Strips the emoji variation selector (U+FE0F) and casefolds so emoji and
+        text reactions both match robustly."""
+        def norm(s: str) -> str:
+            return (s or "").strip().replace("️", "").casefold()
+        k = norm(key)
+        if not k:
+            return False
+        for t in (self.config["react_search_triggers"] or []):
+            if k == norm(str(t)):
+                return True
+        return False
 
     def sanistring(self, query: str) -> str:
         sani = re.sub(r'(\.[a-zA-Z0-9]+)$', '', query) # strip file suffixes first
@@ -754,6 +770,47 @@ class GifMe(Plugin):
         msg_id = await self.client.send_message(room_id, content)
         return msg_id
 
+    async def _resolve_query(self, evt, tags: str) -> Optional[dict]:
+        """Run the local DB + fallback-backend selection for `tags` (already
+        sanitized) and return an msg_info dict ready for send_msg, or None on
+        error / no result. `evt` is used only for error replies. Callers are
+        responsible for setting msg_info["query"] and ["original_sender"]."""
+        msg_info = {}
+        fb = self.config["allow_fallback"].lower()
+        if self.config["fallback_threshold"] < 1:
+            if fb == "giphy":
+                msg_info = await self.get_giphy(evt, tags)
+            elif fb == "klipy":
+                msg_info = await self.get_klipy(evt, tags)
+            elif fb == "duckduckgo":
+                msg_info = await self.get_duckduckgo(evt, tags)
+        else:
+            entries = await self.get_all_entries(tags)
+            if entries:
+                if len(entries) < self.config["fallback_threshold"]:
+                    if fb == "giphy":
+                        msg_info = await self.get_giphy(evt, tags)
+                    elif fb == "klipy":
+                        msg_info = await self.get_klipy(evt, tags)
+                    elif fb == "duckduckgo":
+                        msg_info = await self.get_duckduckgo(evt, tags)
+                else:
+                    best_rank = self._row_get(entries[0], "_rank", 999)
+                    best_tier = [e for e in entries if self._row_get(e, "_rank", 999) == best_rank]
+                    chosen = random.choice(best_tier)
+                    msg_info = self.row_to_info(chosen)
+            else:
+                if fb == "giphy":
+                    msg_info = await self.get_giphy(evt, tags)
+                elif fb == "klipy":
+                    msg_info = await self.get_klipy(evt, tags)
+                elif fb == "duckduckgo":
+                    msg_info = await self.get_duckduckgo(evt, tags)
+                else:
+                    await evt.reply("i couldn't come up with anything, sorry.")
+                    return None
+        return msg_info
+
     @command.new(name=get_command_name, aliases=is_alias, help="save and tag, or return, message contents", require_subcommand=False,
                  arg_fallthrough=False)
 
@@ -775,55 +832,8 @@ class GifMe(Plugin):
             )
             return None
 
-        msg_info = {}
-        fallback_status = 0
         await evt.mark_read()
-        if self.config["fallback_threshold"] < 1:
-            if self.config["allow_fallback"].lower() == "giphy":
-                msg_info = await self.get_giphy(evt, tags)
-            elif self.config["allow_fallback"].lower() == "klipy":
-                msg_info = await self.get_klipy(evt, tags)
-            elif self.config["allow_fallback"].lower() == "duckduckgo":
-                msg_info = await self.get_duckduckgo(evt, tags)
-            ## skip setting fallback_status so we don't send the fallback message every time, that would get old.
-        else:
-            entries = await self.get_all_entries(tags)
-
-            if entries:
-                if len(entries) < self.config["fallback_threshold"]:
-                    if self.config["allow_fallback"].lower() == "giphy":
-                        msg_info = await self.get_giphy(evt, tags)
-                        fallback_status = 1
-                    elif self.config["allow_fallback"].lower() == "klipy":
-                        msg_info = await self.get_klipy(evt, tags)
-                        fallback_status = 1
-                    elif self.config["allow_fallback"].lower() == "duckduckgo":
-                        msg_info = await self.get_duckduckgo(evt, tags)
-                        fallback_status = 1
-                else:
-                    # Get the best rank (first entry has the best rank since results are sorted)
-                    best_rank = self._row_get(entries[0], "_rank", 999) if entries else 999
-                    # Filter to only entries with the best rank (rotate among equally top-ranked matches)
-                    best_tier = [e for e in entries if self._row_get(e, "_rank", 999) == best_rank]
-                    chosen = random.choice(best_tier)
-                    msg_info = self.row_to_info(chosen)
-                    # Store the query and original sender for RETRY functionality
-                    msg_info["query"] = tags
-                    msg_info["original_sender"] = str(evt.sender)
-            else:
-                if self.config["allow_fallback"].lower() == "giphy":
-                    msg_info = await self.get_giphy(evt, tags)
-                    fallback_status = 1
-                elif self.config["allow_fallback"].lower() == "klipy":
-                    msg_info = await self.get_klipy(evt, tags)
-                    fallback_status = 1
-                elif self.config["allow_fallback"].lower() == "duckduckgo":
-                    msg_info = await self.get_duckduckgo(evt, tags)
-                    fallback_status = 1
-                else:
-                    await evt.reply("i couldn't come up with anything, sorry.")
-                    return None
-
+        msg_info = await self._resolve_query(evt, tags)
         if msg_info is None:
             return
         # Store the query and original sender for RETRY functionality
@@ -939,6 +949,63 @@ class GifMe(Plugin):
             )
             return
         await self.save_msg(source_evt, saver=evt.sender, tags="")
+
+    @command.passive(
+        regex=r"(?s).+",
+        field=lambda evt: evt.content.relates_to.key,
+        event_type=EventType.REACTION,
+        msgtypes=None,
+    )
+    async def gif_trigger_react(self, evt: ReactionEvent, key: Tuple[str]) -> None:
+        """React to a text message with a configured trigger (e.g. 🎬 or 'gif')
+        to run a gif search using that message's text as the query."""
+        # Ignore the bot's own reactions (attribution, SAVE, etc.)
+        if evt.sender == self.client.mxid:
+            return
+        reaction_key = evt.content.relates_to.key
+        if not self._is_search_trigger(reaction_key):
+            return
+
+        target_id = evt.content.relates_to.event_id
+        dedupe_key = (str(evt.room_id), str(target_id))
+        if dedupe_key in self._gif_trigger_event_ids:
+            return
+
+        source_evt = await self.client.get_event(evt.room_id, target_id)
+        content = getattr(source_evt, "content", None)
+        msgtype = getattr(content, "msgtype", None)
+        body = getattr(content, "body", None) or ""
+        # Only act on plain text messages; skip media, notices, and bot output.
+        if msgtype != MessageType.TEXT or not body.strip():
+            return
+
+        tags = self.sanistring(body)
+        if not tags:
+            return
+
+        # Claim this message so repeated reactions don't spam the room.
+        self._gif_trigger_event_ids.add(dedupe_key)
+
+        msg_info = await self._resolve_query(source_evt, tags)
+        if msg_info is None:
+            return
+        # The reactor owns RETRY/TRASH on the result.
+        msg_info["query"] = tags
+        msg_info["original_sender"] = str(evt.sender)
+        my_msg = await self.send_msg_to_room(evt.room_id, msg_info)
+
+        if msg_info.get("source") in ("giphy", "klipy", "duckduckgo"):
+            await self.client.react(
+                evt.room_id,
+                my_msg,
+                self._source_attribution(msg_info.get("source")),
+            )
+            if self.config["fallback_threshold"] > 0:
+                await self.client.react(evt.room_id, my_msg, "💾 SAVE")
+        elif self.config["fallback_threshold"] > 0:
+            await self.client.react(evt.room_id, my_msg, "🗃️ from my archives")
+        await self.client.react(evt.room_id, my_msg, "♻️ RETRY")
+        await self.client.react(evt.room_id, my_msg, "🗑️ TRASH")
 
     @command.passive(
         regex=r"^💾 SAVE$",
