@@ -115,3 +115,19 @@ async def upgrade_v2(conn: Connection, scheme: Scheme) -> None:
             )
 
         await conn.execute("DROP TABLE responses")
+
+
+@upgrade_table.register(description="Add gifme_web_sessions table for web archive / widget auth")
+async def upgrade_v3(conn: Connection, scheme: Scheme) -> None:
+    # Portable DDL (TEXT + BIGINT work on both SQLite and Postgres).
+    # kind is 'login' (single-use magic-link token) or 'session' (browser/widget session).
+    await conn.execute(
+        """
+        CREATE TABLE gifme_web_sessions (
+            token      TEXT PRIMARY KEY,
+            user_id    TEXT NOT NULL,
+            kind       TEXT NOT NULL,
+            expires_at BIGINT NOT NULL
+        )
+        """
+    )

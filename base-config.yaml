@@ -57,3 +57,27 @@ react_search_triggers:
   - "🖼️"
   - "🎬"
   - "gif"
+
+## web archive / widget interface
+## serve a paginated, searchable web gallery of all saved entries, which can also
+## be embedded as a Matrix widget (click a gif to send it to the room). requires
+## maubot's webapp support (webapp: true in maubot.yaml).
+web_enabled: true
+
+## number of entries shown per page in the gallery
+web_page_size: 60
+
+## how long a `!gifme magiclink` login link stays valid, in seconds (single-use)
+web_magiclink_ttl: 300
+
+## how long a browser/widget session stays valid once authenticated, in seconds
+web_session_ttl: 604800
+
+## if true, only users in the allowed_users list above may view the web archive
+## (the `restrict_users` setting also implies this)
+web_restrict_to_allowed_users: false
+
+## override the public base URL for web links/widget. leave empty to auto-detect
+## from maubot's configured public_url. set this if auto-detection is wrong (e.g.
+## behind a reverse proxy with a different external hostname).
+base_url: ""

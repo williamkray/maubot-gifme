@@ -4,7 +4,12 @@ from typing import Awaitable, Type, Optional, Tuple
 import asyncio
 import re
 import random
+import time
+import secrets
 import urllib.parse
+from collections import OrderedDict
+
+from aiohttp.web import Request, Response, json_response
 
 from mautrix.client import Client
 from mautrix.types import (Event, MessageType, EventID, UserID, FileInfo, EventType, RoomID,
@@ -12,7 +17,10 @@ from mautrix.types import (Event, MessageType, EventID, UserID, FileInfo, EventT
                             ReactionEvent, RedactionEvent, ImageInfo, RelationType, Format)
 from mautrix.util.config import BaseProxyConfig, ConfigUpdateHelper
 from maubot import Plugin, MessageEvent
-from maubot.handlers import command, event
+from maubot.handlers import command, event, web
+
+from .web import (WIDGET_API_SRC, mxc_to_proxy_url, render_style_css, render_card_html,
+                  render_gallery_html, render_bootstrap_html, render_message_html)
 
 # Optional: for decrypting images in encrypted rooms
 try:
@@ -54,6 +62,12 @@ class Config(BaseProxyConfig):
         helper.copy("allowed_users")
         helper.copy("decryption_for_save")
         helper.copy("react_search_triggers")
+        helper.copy("web_enabled")
+        helper.copy("web_page_size")
+        helper.copy("web_magiclink_ttl")
+        helper.copy("web_session_ttl")
+        helper.copy("web_restrict_to_allowed_users")
+        helper.copy("base_url")
 
 
 class GifMe(Plugin):
@@ -62,6 +76,8 @@ class GifMe(Plugin):
         self.config.load_and_update()
         self._saved_reaction_event_ids: set = set()
         self._gif_trigger_event_ids: set = set()
+        self._web_media_cache: "OrderedDict[str, Tuple[str, bytes]]" = OrderedDict()
+        self._web_media_cache_max: int = 128
 
     def get_command_name(self) -> str:
         return self.config["command_aliases"][0]
@@ -827,7 +843,13 @@ class GifMe(Plugin):
                 f"<code>!{self.config['command_aliases'][0]} save &lt;phrase&gt;</code>: use in reply to a message to save "
                 f"the message contents with &lt;phrase&gt; as tags, or update the existing tags<br />"
                 f"<code>!{self.config['command_aliases'][0]} tags</code>: use in reply to a message i sent "
-                f"to see the tags associated with that message in the database</p>",
+                f"to see the tags associated with that message in the database<br />"
+                f"<code>!{self.config['command_aliases'][0]} magiclink</code>: DM you a private link to "
+                f"browse the saved-gif web archive<br />"
+                f"<code>!{self.config['command_aliases'][0]} addwidget</code>: add the saved-gif archive "
+                f"as a widget in this room (so you can click-to-send gifs)<br />"
+                f"<code>!{self.config['command_aliases'][0]} getwidgetinfo</code>: show the URL for adding "
+                f"the archive as a Matrix widget manually</p>",
                 allow_html=True,
             )
             return None
@@ -1303,6 +1325,483 @@ class GifMe(Plugin):
             await evt.reply(f"i don't see this message in my database.")
 
 
+
+    # ------------------------------------------------------------------ #
+    #  web archive / widget interface                                     #
+    # ------------------------------------------------------------------ #
+
+    def _tag_like_clause(self, q: str) -> Tuple[str, list]:
+        """Build (where_sql, params) matching every sanitized word of q against
+        tags with LIKE. Returns ('', []) when q has no searchable words."""
+        words = [w for w in self.sanistring(q).split() if w]
+        if not words:
+            return "", []
+        conds = " AND ".join(
+            f"LOWER(COALESCE(tags, '')) LIKE ${i + 1}" for i in range(len(words))
+        )
+        params = [f"%{w}%" for w in words]
+        return conds, params
+
+    async def count_entries(self, q: str) -> int:
+        where, params = self._tag_like_clause(q)
+        if where:
+            n = await self.database.fetchval(
+                f"SELECT COUNT(*) FROM entries WHERE {where}", *params
+            )
+        else:
+            n = await self.database.fetchval("SELECT COUNT(*) FROM entries")
+        return int(n or 0)
+
+    async def page_entries(self, q: str, limit: int, offset: int) -> list:
+        where, params = self._tag_like_clause(q)
+        if where:
+            sql = (
+                f"SELECT * FROM entries WHERE {where} "
+                f"ORDER BY id DESC LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
+            )
+            return await self.database.fetch(sql, *params, limit, offset)
+        return await self.database.fetch(
+            "SELECT * FROM entries ORDER BY id DESC LIMIT $1 OFFSET $2", limit, offset
+        )
+
+    async def create_web_token(self, user_id: str, kind: str, ttl: int) -> str:
+        token = secrets.token_urlsafe(32)
+        expires_at = int(time.time()) + int(ttl)
+        await self.database.execute(
+            "INSERT INTO gifme_web_sessions (token, user_id, kind, expires_at) "
+            "VALUES ($1, $2, $3, $4)",
+            token, user_id, kind, expires_at,
+        )
+        return token
+
+    async def redeem_login_token(self, token: str) -> Optional[str]:
+        """Validate and consume a single-use login token; return its user_id or None."""
+        if not token:
+            return None
+        row = await self.database.fetchrow(
+            "SELECT user_id, kind, expires_at FROM gifme_web_sessions WHERE token = $1",
+            token,
+        )
+        if not row:
+            return None
+        # single-use: always delete, valid or not
+        await self.database.execute(
+            "DELETE FROM gifme_web_sessions WHERE token = $1", token
+        )
+        if self._row_get(row, "kind") != "login":
+            return None
+        if int(self._row_get(row, "expires_at") or 0) < int(time.time()):
+            return None
+        return self._row_get(row, "user_id")
+
+    async def get_session_user(self, token: str) -> Optional[str]:
+        if not token:
+            return None
+        row = await self.database.fetchrow(
+            "SELECT user_id, expires_at FROM gifme_web_sessions "
+            "WHERE token = $1 AND kind = 'session'",
+            token,
+        )
+        if not row:
+            return None
+        if int(self._row_get(row, "expires_at") or 0) < int(time.time()):
+            return None
+        return self._row_get(row, "user_id")
+
+    async def prune_web_sessions(self) -> None:
+        try:
+            await self.database.execute(
+                "DELETE FROM gifme_web_sessions WHERE expires_at < $1", int(time.time())
+            )
+        except Exception as e:
+            self.log.debug("prune_web_sessions failed: %s", e)
+
+    def _web_base(self) -> str:
+        """Public base URL for this plugin's web endpoints (no trailing slash)."""
+        override = self.config["base_url"]
+        if override:
+            return str(override).rstrip("/")
+        try:
+            return str(self.webapp_url).rstrip("/")
+        except Exception:
+            return ""
+
+    async def _resolve_federation_base(self, server_name: str) -> str:
+        """Resolve a Matrix server_name to its federation https base via .well-known."""
+        try:
+            async with self.http.get(
+                f"https://{server_name}/.well-known/matrix/server"
+            ) as r:
+                if r.status == 200:
+                    data = await r.json(content_type=None)
+                    delegated = data.get("m.server")
+                    if delegated:
+                        return f"https://{delegated}"
+        except Exception as e:
+            self.log.debug("well-known lookup for %s failed: %s", server_name, e)
+        return f"https://{server_name}:8448"
+
+    async def _verify_openid(self, access_token: str, server_name: str) -> Optional[str]:
+        """Verify a widget OpenID token via the federation userinfo endpoint.
+        Returns the verified MXID (sub) or None."""
+        if not access_token or not server_name:
+            return None
+        if not re.match(r"^[A-Za-z0-9.\-]+(:\d+)?$", server_name):
+            return None
+        base = await self._resolve_federation_base(server_name)
+        try:
+            async with self.http.get(
+                f"{base}/_matrix/federation/v1/openid/userinfo",
+                params={"access_token": access_token},
+            ) as r:
+                if r.status != 200:
+                    self.log.debug("openid userinfo returned %s", r.status)
+                    return None
+                data = await r.json(content_type=None)
+                return data.get("sub")
+        except Exception as e:
+            self.log.warning("openid verification failed: %s", e)
+            return None
+
+    def _user_allowed_web(self, user_id: str) -> bool:
+        """Apply the web/allowed-users gate to a verified user_id."""
+        if self.config["web_restrict_to_allowed_users"] or self.config["restrict_users"]:
+            return user_id in (self.config["allowed_users"] or [])
+        return True
+
+    async def _shares_room_with_bot(
+        self, user_id: str, hint_room: Optional[str] = None
+    ) -> bool:
+        """True if user_id is a joined member of any room the bot is also in.
+        Checks hint_room (the widget's room) first for the common fast path."""
+        try:
+            bot_rooms = list(await self.client.get_joined_rooms() or [])
+        except Exception as e:
+            self.log.warning("get_joined_rooms failed: %s", e)
+            return False
+        ordered = ([hint_room] if hint_room and hint_room in bot_rooms else []) + bot_rooms
+        for room_id in ordered:
+            try:
+                members = await self.client.get_joined_members(room_id)
+            except Exception:
+                continue
+            if user_id in members:
+                return True
+        return False
+
+    async def _req_session_user(self, req: Request) -> Optional[str]:
+        return await self.get_session_user(req.query.get("t", ""))
+
+    def _entry_view(self, row, token: str, base: str) -> dict:
+        """Flatten an entries row into the plain dict web.render_card_html expects."""
+        msgtype = self._row_get(row, "msgtype") or "image"
+        if msgtype not in ("image", "video", "text"):
+            msgtype = "image"
+        original = self._row_get(row, "original") or ""
+        is_media = msgtype in ("image", "video")
+        mxc = original if (is_media and original.startswith("mxc://")) else ""
+        return {
+            "id": self._row_get(row, "id"),
+            "msgtype": msgtype,
+            "media_url": mxc_to_proxy_url(base, mxc, token) if mxc else "",
+            "mxc": mxc,
+            "mime": self._row_get(row, "mime_type") or "",
+            "w": self._row_get(row, "width"),
+            "h": self._row_get(row, "height"),
+            "size": self._row_get(row, "size"),
+            "filename": self._row_get(row, "filename") or "",
+            "body": self._row_get(row, "body") or "",
+            "formatted_body": self._row_get(row, "formatted_body") or "",
+            "sender": self._row_get(row, "sender") or "",
+            "tags": self._row_get(row, "tags") or "",
+            "source": self._row_get(row, "source") or "",
+        }
+
+    async def _get_dm_room(self, user_id: str) -> Optional[str]:
+        """Find an existing DM with user_id (via m.direct) or create one."""
+        direct = None
+        try:
+            direct = await self.client.get_account_data("m.direct")
+        except Exception:
+            direct = None
+        if isinstance(direct, dict):
+            for r in (direct.get(user_id) or []):
+                try:
+                    members = await self.client.get_joined_members(r)
+                except Exception:
+                    continue
+                if user_id in members and self.client.mxid in members:
+                    return r
+        try:
+            created = await self.client.create_room(invitees=[user_id], is_direct=True)
+        except Exception as e:
+            self.log.warning("could not create DM room for %s: %s", user_id, e)
+            return None
+        room_id = getattr(created, "room_id", created)
+        try:
+            direct = direct if isinstance(direct, dict) else {}
+            direct.setdefault(user_id, [])
+            if room_id not in direct[user_id]:
+                direct[user_id].append(room_id)
+            await self.client.set_account_data("m.direct", direct)
+        except Exception as e:
+            self.log.debug("could not update m.direct: %s", e)
+        return room_id
+
+    @web.get("/style.css")
+    async def web_style(self, req: Request) -> Response:
+        return Response(
+            text=render_style_css(),
+            content_type="text/css",
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+
+    @web.get("/")
+    async def web_gallery(self, req: Request) -> Response:
+        if not self.config["web_enabled"]:
+            return Response(status=404, text="not found")
+        user_id = await self._req_session_user(req)
+        if not user_id:
+            return Response(
+                status=401,
+                content_type="text/html",
+                text=render_message_html(
+                    title="Not authorized",
+                    message=(
+                        "Your session is missing or has expired. Run "
+                        f"!{self.config['command_aliases'][0]} magiclink to get a new link."
+                    ),
+                ),
+            )
+        token = req.query.get("t", "")
+        q = req.query.get("q", "") or ""
+        widget = req.query.get("widget") == "1"
+        try:
+            page = max(1, int(req.query.get("page", "1")))
+        except ValueError:
+            page = 1
+        per_page = int(self.config["web_page_size"] or 60)
+        total = await self.count_entries(q)
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        page = min(page, total_pages)
+        offset = (page - 1) * per_page
+        rows = await self.page_entries(q, per_page, offset)
+        base = self._web_base()
+        cards = "".join(
+            render_card_html(self._entry_view(r, token, base), widget) for r in rows
+        )
+        return Response(
+            text=render_gallery_html(
+                base=base, token=token, q=q, page=page,
+                total_pages=total_pages, cards_html=cards, widget=widget,
+                widget_id=req.query.get("widgetId", ""),
+                parent_url=req.query.get("parentUrl", ""),
+            ),
+            content_type="text/html",
+        )
+
+    @web.get("/media/{server}/{media_id}")
+    async def web_media(self, req: Request) -> Response:
+        if not self.config["web_enabled"]:
+            return Response(status=404, text="not found")
+        if not await self._req_session_user(req):
+            return Response(status=401, text="unauthorized")
+        server = req.match_info["server"]
+        media_id = req.match_info["media_id"]
+        mxc = f"mxc://{server}/{media_id}"
+        cached = self._web_media_cache.get(mxc)
+        if cached is None:
+            try:
+                data = await self.client.download_media(mxc)
+            except Exception as e:
+                self.log.warning("media download failed for %s: %s", mxc, e)
+                return Response(status=404, text="media not found")
+            mime = await self.database.fetchval(
+                "SELECT mime_type FROM entries WHERE original = $1", mxc
+            ) or "application/octet-stream"
+            cached = (mime, data)
+            self._web_media_cache[mxc] = cached
+            self._web_media_cache.move_to_end(mxc)
+            while len(self._web_media_cache) > self._web_media_cache_max:
+                self._web_media_cache.popitem(last=False)
+        else:
+            self._web_media_cache.move_to_end(mxc)
+        mime, data = cached
+        return Response(
+            body=data, content_type=mime,
+            headers={"Cache-Control": "private, max-age=86400"},
+        )
+
+    @web.get("/login")
+    async def web_login(self, req: Request) -> Response:
+        if not self.config["web_enabled"]:
+            return Response(status=404, text="not found")
+        await self.prune_web_sessions()
+        user_id = await self.redeem_login_token(req.query.get("t", ""))
+        if not user_id:
+            return Response(
+                status=401,
+                content_type="text/html",
+                text=render_message_html(
+                    title="Link expired",
+                    message=(
+                        "This login link is invalid or already used. Request a new one "
+                        f"with !{self.config['command_aliases'][0]} magiclink."
+                    ),
+                ),
+            )
+        session = await self.create_web_token(
+            user_id, "session", int(self.config["web_session_ttl"] or 604800)
+        )
+        base = self._web_base()
+        return Response(
+            status=302,
+            headers={"Location": f"{base}/?t={urllib.parse.quote(session)}"},
+        )
+
+    @web.get("/widget")
+    async def web_widget(self, req: Request) -> Response:
+        if not self.config["web_enabled"]:
+            return Response(status=404, text="not found")
+        return Response(
+            text=render_bootstrap_html(base=self._web_base()),
+            content_type="text/html",
+        )
+
+    @web.post("/widget/auth")
+    async def web_widget_auth(self, req: Request) -> Response:
+        if not self.config["web_enabled"]:
+            return json_response({"error": "disabled"}, status=404)
+        await self.prune_web_sessions()
+        try:
+            body = await req.json()
+        except Exception:
+            return json_response({"error": "bad request"}, status=400)
+        user_id = await self._verify_openid(
+            body.get("openid_token"), body.get("matrix_server_name")
+        )
+        if not user_id:
+            return json_response({"error": "openid verification failed"}, status=401)
+        if not self._user_allowed_web(user_id):
+            return json_response({"error": "not allowed"}, status=403)
+        if not await self._shares_room_with_bot(user_id, body.get("room_id") or None):
+            return json_response(
+                {"error": "you must share a room with the bot"}, status=403
+            )
+        session = await self.create_web_token(
+            user_id, "session", int(self.config["web_session_ttl"] or 604800)
+        )
+        return json_response({"token": session})
+
+    @gifme.subcommand(
+        "magiclink", help="DM you a private link to browse the saved-gif web archive"
+    )
+    async def magiclink(self, evt: MessageEvent) -> None:
+        await evt.mark_read()
+        if not self.config["web_enabled"]:
+            await evt.reply("the web archive isn't enabled on this bot.")
+            return
+        if not self._user_allowed_web(str(evt.sender)):
+            await evt.reply("you're not allowed to do that.")
+            return
+        base = self._web_base()
+        if not base:
+            await evt.reply(
+                "i don't have a web address configured, so i can't make a link."
+            )
+            return
+        token = await self.create_web_token(
+            str(evt.sender), "login", int(self.config["web_magiclink_ttl"] or 300)
+        )
+        link = f"{base}/login?t={urllib.parse.quote(token)}"
+        ttl_min = max(1, int(self.config["web_magiclink_ttl"] or 300) // 60)
+        dm_room = await self._get_dm_room(str(evt.sender))
+        if dm_room:
+            try:
+                await self.client.send_text(
+                    dm_room,
+                    f"here's your private archive link (valid {ttl_min} min, "
+                    f"one-time use): {link}",
+                )
+                await evt.reply("📬 check your DMs for a private link to the archive.")
+                return
+            except Exception as e:
+                self.log.warning("magiclink DM failed: %s", e)
+        await evt.reply(
+            f"i couldn't DM you — here's your one-time link (valid {ttl_min} min): {link}"
+        )
+
+    @gifme.subcommand(
+        "getwidgetinfo", help="show the URL for adding the archive as a Matrix widget"
+    )
+    async def getwidgetinfo(self, evt: MessageEvent) -> None:
+        await evt.mark_read()
+        if not self.config["web_enabled"]:
+            await evt.reply("the web archive isn't enabled on this bot.")
+            return
+        base = self._web_base()
+        if not base:
+            await evt.reply("i don't have a web address configured.")
+            return
+        widget_url = f"{base}/widget?widgetId=$matrix_widget_id&roomId=$matrix_room_id"
+        await evt.reply(
+            f"the easiest way is to have me add it (with a proper name): "
+            f"<code>!{self.config['command_aliases'][0]} addwidget</code><br /><br />"
+            "or add it yourself — an admin can run:<br />"
+            f"<code>/addwidget {widget_url}</code><br />"
+            "(note: adding it this way names it &quot;Custom&quot;; you can rename it in the "
+            "widget's edit menu). inside the widget you can browse, search, and click a gif "
+            "to send it straight to the chat.",
+            allow_html=True,
+        )
+
+    @gifme.subcommand(
+        "addwidget", help="add the gif archive as a widget in this room (named properly)"
+    )
+    async def addwidget(self, evt: MessageEvent) -> None:
+        await evt.mark_read()
+        if not self.config["web_enabled"]:
+            await evt.reply("the web archive isn't enabled on this bot.")
+            return
+        if self.config["restrict_users"] and str(evt.sender) not in (
+            self.config["allowed_users"] or []
+        ):
+            await evt.reply("you're not allowed to do that.")
+            return
+        base = self._web_base()
+        if not base:
+            await evt.reply("i don't have a web address configured.")
+            return
+        # The client appends parentUrl and substitutes $matrix_widget_id (= the state_key)
+        # and $matrix_room_id when it loads the widget, so we only template those here.
+        widget_url = f"{base}/widget?widgetId=$matrix_widget_id&roomId=$matrix_room_id"
+        state_key = "gifme"
+        content = {
+            "type": "m.custom",
+            "url": widget_url,
+            "name": "GIF Archive",
+            "creatorUserId": str(self.client.mxid),
+            "id": state_key,
+            "waitForIframeLoad": True,
+            "data": {"title": "GIF Archive"},
+        }
+        widget_type = EventType.find(
+            "im.vector.modular.widgets", t_class=EventType.Class.STATE
+        )
+        try:
+            await self.client.send_state_event(
+                evt.room_id, widget_type, content, state_key=state_key
+            )
+        except Exception as e:
+            self.log.warning("addwidget failed in %s: %s", evt.room_id, e)
+            await evt.reply(
+                "i couldn't add the widget — i probably don't have permission to edit "
+                "widgets in this room. give me a high enough power level, or add it "
+                f"manually with <code>!{self.config['command_aliases'][0]} getwidgetinfo</code>.",
+                allow_html=True,
+            )
+            return
+        await evt.reply("✅ added the &quot;GIF Archive&quot; widget to this room.", allow_html=True)
 
     @classmethod
     def get_db_upgrade_table(cls) -> None:

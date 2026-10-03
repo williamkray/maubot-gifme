@@ -1,0 +1,6 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# maubot build artifacts
+*.mbp
