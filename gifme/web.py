@@ -188,6 +188,34 @@ a:hover { text-decoration: underline; }
 .pager .page-info {
   color: #606880;
 }
+
+/* tabs */
+.gifme-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.gifme-tab {
+  background: #1a1a2e;
+  border: 1px solid #2d3561;
+  border-radius: 6px;
+  color: #a0aec0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 6px 12px;
+}
+
+.gifme-tab:hover { background: #1e2a50; }
+.gifme-tab.active { background: #3d5afe; color: #fff; border-color: #3d5afe; }
+
+/* live-search status line */
+#live-status {
+  color: #a0aec0;
+  font-size: 0.9rem;
+  padding: 16px;
+  text-align: center;
+}
 """
 
 
@@ -276,6 +304,7 @@ def render_gallery_html(
     widget: bool,
     widget_id: str = "",
     parent_url: str = "",
+    live_providers: list = None,
 ) -> str:
     """Return a complete HTML5 gallery document."""
 
@@ -303,7 +332,18 @@ def render_gallery_html(
         f'<button type="submit">Search</button>'
         f'</form>'
     )
-    topbar_html = f'<div class="gifme-topbar">{form_html}</div>'
+    # live-search tabs (widget mode only, for providers with a proxy + api key)
+    tabs_html = ""
+    if widget and live_providers:
+        labels = {"giphy": "Giphy", "klipy": "Klipy"}
+        buttons = ['<button type="button" class="gifme-tab active" data-tab="archive">Archive</button>']
+        for p in live_providers:
+            buttons.append(
+                f'<button type="button" class="gifme-tab" data-tab="{html.escape(p)}">'
+                f'{html.escape(labels.get(p, p.title()))}</button>'
+            )
+        tabs_html = f'<div class="gifme-tabs">{"".join(buttons)}</div>'
+    topbar_html = f'<div class="gifme-topbar">{tabs_html}{form_html}</div>'
 
     # pager
     def page_url(target_page: int) -> str:
@@ -339,6 +379,8 @@ def render_gallery_html(
   var q = new URLSearchParams(window.location.search);
   var widgetId = q.get('widgetId') || 'gifme';
   var parentUrl = q.get('parentUrl');
+  var base = (typeof GIFME_BASE !== 'undefined') ? GIFME_BASE : '';
+  var token = (typeof GIFME_TOKEN !== 'undefined') ? GIFME_TOKEN : (q.get('t') || '');
   var origin = '*';
   try { if (parentUrl) origin = new URL(parentUrl).origin; } catch (e) {}
   var NS = mxwidgets; if (typeof NS === 'function' && !NS.WidgetApi) NS = NS();
@@ -349,7 +391,8 @@ def render_gallery_html(
   api.requestCapabilityToSendMessage('m.video');
   api.requestCapabilityToSendMessage('m.notice');
   api.start();
-  document.querySelectorAll('.gifme-send').forEach(function(btn){
+
+  function wireSend(btn){
     btn.addEventListener('click', function(){
       var content;
       if (btn.dataset.msgtype === 'text') {
@@ -377,15 +420,114 @@ def render_gallery_html(
         btn.textContent = 'Failed'; btn.disabled = false;
       });
     });
-  });
+  }
+  document.querySelectorAll('.gifme-send').forEach(wireSend);
+
+  // ---- tabs + live search ----
+  var tabs = document.querySelectorAll('.gifme-tab');
+  if (tabs.length) {
+    var archiveView = document.getElementById('archive-view');
+    var liveView = document.getElementById('live-view');
+    var liveGrid = document.getElementById('live-grid');
+    var liveStatus = document.getElementById('live-status');
+    var form = document.querySelector('.gifme-topbar form');
+    var input = form ? form.querySelector('input[name="q"]') : null;
+    var active = 'archive';
+    var liveSeq = 0;
+
+    function renderLiveCard(g){
+      var card = document.createElement('div');
+      card.className = 'gifme-card';
+      var img = document.createElement('img');
+      img.loading = 'lazy';
+      img.src = g.preview;
+      img.alt = g.filename || 'gif';
+      card.appendChild(img);
+      var btn = document.createElement('button');
+      btn.className = 'gifme-send';
+      btn.type = 'button';
+      btn.textContent = 'Send to room';
+      btn.dataset.msgtype = g.msgtype || 'image';
+      btn.dataset.mxc = g.mxc || '';
+      btn.dataset.mime = g.mime || '';
+      btn.dataset.w = g.w || '';
+      btn.dataset.h = g.h || '';
+      btn.dataset.size = g.size || '';
+      btn.dataset.body = g.filename || 'gif';
+      card.appendChild(btn);
+      wireSend(btn);
+      return card;
+    }
+
+    function liveSearch(provider, query){
+      if (!query) { liveGrid.innerHTML = ''; liveStatus.textContent = 'Type a search above and hit Search.'; return; }
+      var seq = ++liveSeq;
+      liveStatus.textContent = 'Searching…';
+      liveGrid.innerHTML = '';
+      fetch(base + '/search/' + provider + '?q=' + encodeURIComponent(query) + '&t=' + encodeURIComponent(token))
+        .then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(function(d){
+          if (seq !== liveSeq) return;
+          var res = (d && d.results) || [];
+          if (!res.length) { liveStatus.textContent = 'No results.'; return; }
+          liveStatus.textContent = '';
+          var frag = document.createDocumentFragment();
+          res.forEach(function(g){ frag.appendChild(renderLiveCard(g)); });
+          liveGrid.appendChild(frag);
+        })
+        .catch(function(e){
+          if (seq !== liveSeq) return;
+          console.error('gifme live search failed', e);
+          liveStatus.textContent = 'Search failed.';
+        });
+    }
+
+    function setActive(tab){
+      active = tab;
+      tabs.forEach(function(t){ t.classList.toggle('active', t.dataset.tab === tab); });
+      if (tab === 'archive') {
+        if (archiveView) archiveView.style.display = '';
+        if (liveView) liveView.style.display = 'none';
+      } else {
+        if (archiveView) archiveView.style.display = 'none';
+        if (liveView) liveView.style.display = '';
+        liveSearch(tab, input ? input.value.trim() : '');
+      }
+    }
+
+    tabs.forEach(function(t){ t.addEventListener('click', function(){ setActive(t.dataset.tab); }); });
+
+    if (form) {
+      form.addEventListener('submit', function(e){
+        if (active !== 'archive') { e.preventDefault(); liveSearch(active, input ? input.value.trim() : ''); }
+      });
+    }
+  }
 })();"""
         widget_api_src_esc = html.escape(WIDGET_API_SRC)
+        widget_cfg = f"var GIFME_BASE={json.dumps(base)};var GIFME_TOKEN={json.dumps(token)};"
         script_block = (
             f'<script src="{widget_api_src_esc}"></script>\n'
-            f'<script>{widget_js}</script>'
+            f'<script>{widget_cfg}\n{widget_js}</script>'
         )
     else:
         script_block = ""
+
+    archive_html = (
+        f'<div id="archive-view">\n'
+        f'<div class="gifme-grid">{cards_html}</div>\n'
+        f'{pager_html}\n'
+        f'</div>'
+    )
+    if widget and live_providers:
+        live_html = (
+            '<div id="live-view" style="display:none">\n'
+            '<div id="live-status"></div>\n'
+            '<div class="gifme-grid" id="live-grid"></div>\n'
+            '</div>'
+        )
+    else:
+        live_html = ""
 
     return (
         f'<!DOCTYPE html>\n'
@@ -398,8 +540,8 @@ def render_gallery_html(
         f'</head>\n'
         f'<body>\n'
         f'{topbar_html}\n'
-        f'<div class="gifme-grid">{cards_html}</div>\n'
-        f'{pager_html}\n'
+        f'{archive_html}\n'
+        f'{live_html}\n'
         f'{script_block}'
         f'</body>\n'
         f'</html>'

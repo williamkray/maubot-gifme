@@ -45,6 +45,13 @@ _DDG_USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
 
+# Klipy webp CDN URL → stable gifproxy media id. The proxy (https://mau.dev/gomuks/gifproxy)
+# reconstructs the path from this id via split_idx [32, 34, 36]; we concatenate the four
+# captured path components to form the id, matching gomuks-web's gif picker.
+_KLIPY_WEBP_RE = re.compile(
+    r"https://static\.klipy\.com/ii/([a-f0-9]{32})/([a-f0-9]{2})/([a-f0-9]{2})/([A-Za-z0-9]+)\.webp"
+)
+
 
 class Config(BaseProxyConfig):
     def do_update(self, helper: ConfigUpdateHelper) -> None:
@@ -53,6 +60,9 @@ class Config(BaseProxyConfig):
         helper.copy("fallback_threshold")
         helper.copy("giphy_api_key")
         helper.copy("klipy_api_key")
+        helper.copy("use_media_proxy")
+        helper.copy("giphy_proxy")
+        helper.copy("klipy_proxy")
         helper.copy("duckduckgo_force_gif")
         helper.copy("duckduckgo_size")
         helper.copy("duckduckgo_safesearch")
@@ -141,49 +151,76 @@ class GifMe(Plugin):
         base = self.sanistring(body) or "image"
         return base + suffix
 
-    async def get_giphy(self, evt: MessageEvent, query: str) -> None:
-
-        #query = query.replace('"', '') # remove quotes to pass raw terms to giphy
+    async def _search_giphy(self, query: str, limit: int = 50) -> list:
+        """Query the GIPHY search API and return a list of normalized candidate
+        dicts. Raises on HTTP/parse errors; returns [] when there are no results."""
         query = self.sanistring(query)
-        api_data = None
-        info = {}
-        imgdata = None
-        url_params = urllib.parse.urlencode({"q": query, "api_key": self.config["giphy_api_key"], "limit": 5})
-
-        ## first we get a json response from giphy with our query parameters
+        url_params = urllib.parse.urlencode(
+            {"q": query, "api_key": self.config["giphy_api_key"], "limit": limit}
+        )
         async with self.http.get(
-            "http://api.giphy.com/v1/gifs/search?{}".format(url_params)
+            "https://api.giphy.com/v1/gifs/search?{}".format(url_params)
         ) as api_response:
             if api_response.status != 200:
-                await evt.reply(f"Something went wrong, I got the following response from \
-                            the Giphy search API: {api_response.status}")
-                return None
-
+                raise RuntimeError(f"GIPHY search API returned {api_response.status}")
             api_data = await api_response.json()
+        out = []
+        for g in (api_data.get("data") or []):
+            try:
+                orig = g["images"]["original"]
+                out.append({
+                    "id": g["id"],
+                    "slug": g.get("slug") or query or "gif",
+                    "gif_url": orig["url"],
+                    "gif_size": int(orig.get("size") or 0),
+                    "webp_url": orig["webp"],
+                    "webp_size": int(orig.get("webp_size") or 0),
+                    "width": int(orig.get("width") or 0) or 480,
+                    "height": int(orig.get("height") or 0) or 270,
+                })
+            except (KeyError, TypeError, ValueError):
+                continue
+        return out
 
-        ## pick a random gif from the list of results returned
+    async def get_giphy(self, evt: MessageEvent, query: str) -> None:
+        query = self.sanistring(query)
         try:
-            picked_gif = random.choice(api_data['data'])
+            candidates = await self._search_giphy(query)
         except Exception as e:
-            await evt.reply(f"Oops, I had an accident trying to pick a random Gif from Giphy: {e}")
+            await evt.reply(f"Something went wrong talking to the Giphy search API: {e}")
+            return None
+        if not candidates:
+            await evt.reply("i couldn't find anything on Giphy for that, sorry.")
+            return None
+        picked = random.choice(candidates)
 
-        ## get the info for the gif we've picked
-        gif_link = picked_gif['images']['original']['url']
-        info['width'] = int(picked_gif['images']['original']['width']) or 480
-        info['height'] = int(picked_gif['images']['original']['height']) or 270
-        info['size'] = int(picked_gif['images']['original']['size'])
-        info['mimetype'] = 'image/gif'
-        info['filename'] = f"{query}.gif"
+        info = {
+            "source": "giphy",
+            "width": picked["width"],
+            "height": picked["height"],
+        }
 
-        ## download the image, and upload it to the matrix media repository
-        async with self.http.get(gif_link) as response:
+        proxy = (self.config["giphy_proxy"] or "").strip()
+        if self.config["use_media_proxy"] and proxy:
+            info["original"] = f"mxc://{proxy}/{picked['id']}"
+            info["mimetype"] = "image/webp"
+            info["size"] = picked["webp_size"]
+            # filename drives auto-derived tags on save, so keep it the query
+            # (matches the legacy giphy path and klipy)
+            info["filename"] = f"{query}.webp"
+            return info
+
+        # legacy behavior: download the gif and upload it to our media repo
+        info["mimetype"] = "image/gif"
+        info["size"] = picked["gif_size"]
+        info["filename"] = f"{query}.gif"
+        async with self.http.get(picked["gif_url"]) as response:
             if response.status != 200:
-                await evt.reply(f"Something went wrong, I got the following response when \
-                                downloading the image from Giphy: {response.status}")
+                await evt.reply(
+                    f"Something went wrong downloading the image from Giphy: {response.status}"
+                )
                 return None
-
             imgdata = await response.read()
-
         try:
             info["original"] = await self.client.upload_media(
                 imgdata, mime_type=info["mimetype"], filename=info["filename"]
@@ -191,64 +228,82 @@ class GifMe(Plugin):
         except Exception as e:
             await evt.reply(f"Oops, I had an accident uploading my image to matrix: {e}")
             return None
-
-        info["source"] = "giphy"
         return info
 
-    async def get_klipy(self, evt: MessageEvent, query: str) -> None:
-
-        #query = query.replace('"', '') # remove quotes to pass raw terms to klipy
+    async def _search_klipy(self, query: str, limit: int = 50) -> list:
+        """Query the Klipy search API (webp format) and return normalized candidate
+        dicts whose `id` is the gifproxy media id. Raises on HTTP/parse errors;
+        returns [] when there are no usable results."""
         query = self.sanistring(query)
-        api_data = None
-        info = {}
-        imgdata = None
-        url_params = urllib.parse.urlencode({"q": query, "key": self.config["klipy_api_key"], 
-                                             "limit": 5})
-
-        ## first we get a json response from klipy with our query parameters
+        url_params = urllib.parse.urlencode(
+            {"q": query, "key": self.config["klipy_api_key"], "limit": limit,
+             "media_filter": "webp"}
+        )
         async with self.http.get(
             "https://api.klipy.com/v2/search?{}".format(url_params)
         ) as api_response:
             if api_response.status != 200:
-                await evt.reply(f"Something went wrong, I got the following response from \
-                            the Klipy search API: {api_response.status}")
-                return None
-
+                raise RuntimeError(f"Klipy search API returned {api_response.status}")
             api_data = await api_response.json()
+        out = []
+        for g in (api_data.get("results") or []):
+            try:
+                webp = g["media_formats"]["webp"]
+                m = _KLIPY_WEBP_RE.match(webp["url"])
+                if not m:
+                    continue
+                out.append({
+                    "id": m.group(1) + m.group(2) + m.group(3) + m.group(4),
+                    "webp_url": webp["url"],
+                    "size": int(webp.get("size") or 0),
+                    "width": int(webp["dims"][0]) or 480,
+                    "height": int(webp["dims"][1]) or 270,
+                })
+            except (KeyError, TypeError, ValueError, IndexError):
+                continue
+        return out
 
-        ## pick a random gif from the list of results returned
+    async def get_klipy(self, evt: MessageEvent, query: str) -> None:
+        query = self.sanistring(query)
         try:
-            picked_gif = random.choice(api_data['results'])["media_formats"]["gif"]
+            candidates = await self._search_klipy(query)
         except Exception as e:
-            await evt.reply(f"Oops, I had an accident trying to pick a random Gif from Klipy: {e}")
+            await evt.reply(f"Something went wrong talking to the Klipy search API: {e}")
             return None
+        if not candidates:
+            await evt.reply("i couldn't find anything on Klipy for that, sorry.")
+            return None
+        picked = random.choice(candidates)
 
-        ## get the info for the gif we've picked
-        gif_link = picked_gif['url']
-        info['width'] = int(picked_gif['dims'][0]) or 480
-        info['height'] = int(picked_gif['dims'][1]) or 270
-        info['size'] = int(picked_gif['size'])
-        info['mimetype'] = 'image/gif'
-        info['filename'] = f"{query}.gif"
+        info = {
+            "source": "klipy",
+            "width": picked["width"],
+            "height": picked["height"],
+            "mimetype": "image/webp",
+            "size": picked["size"],
+            "filename": f"{query}.webp",
+        }
 
-        ## download the image, and upload it to the matrix media repository
-        async with self.http.get(gif_link) as response:
+        proxy = (self.config["klipy_proxy"] or "").strip()
+        if self.config["use_media_proxy"] and proxy:
+            info["original"] = f"mxc://{proxy}/{picked['id']}"
+            return info
+
+        # legacy behavior: download the webp and upload it to our media repo
+        async with self.http.get(picked["webp_url"]) as response:
             if response.status != 200:
-                await evt.reply(f"Something went wrong, I got the following response when \
-                                downloading the image from Klipy: {response.status}")
+                await evt.reply(
+                    f"Something went wrong downloading the image from Klipy: {response.status}"
+                )
                 return None
-
             imgdata = await response.read()
-
         try:
             info["original"] = await self.client.upload_media(
-                imgdata, mime_type=info["mimetype"], filename=info["filename"]
+                imgdata, mime_type="image/webp", filename=info["filename"]
             )
         except Exception as e:
             await evt.reply(f"Oops, I had an accident uploading my image to matrix: {e}")
             return None
-
-        info["source"] = "klipy"
         return info
 
     async def get_duckduckgo(self, evt: MessageEvent, query: str) -> None:
@@ -623,8 +678,34 @@ class GifMe(Plugin):
                     await source_evt.reply("sorry, i couldn't decrypt the file.")
                     return None
             else:
-                message_info["original"] = content.url
-                message_info["filename"] = self._resolve_filename_for_media(content)
+                filename = self._resolve_filename_for_media(content)
+                url = content.url or ""
+                # Proxied media (mxc:// pointing at a gifproxy) is ephemeral: it only
+                # resolves as long as the proxy + upstream CDN keep serving it. When
+                # saving to the archive we download it and re-upload to our own media
+                # repo so the saved entry is permanent and self-hosted.
+                proxy_servers = {
+                    (self.config["giphy_proxy"] or "").strip(),
+                    (self.config["klipy_proxy"] or "").strip(),
+                }
+                proxy_servers.discard("")
+                server = url[6:].split("/", 1)[0] if url.startswith("mxc://") else ""
+                if server and server in proxy_servers:
+                    try:
+                        data = await self._download_media(url)
+                        mime = content.info.mimetype or "image/webp"
+                        message_info["original"] = await self.client.upload_media(
+                            data, mime_type=mime, filename=filename
+                        )
+                    except Exception as e:
+                        self.log.warning("failed to persist proxied media %s: %s", url, e)
+                        await source_evt.reply(
+                            "sorry, i couldn't save that proxied gif permanently."
+                        )
+                        return None
+                else:
+                    message_info["original"] = content.url
+                message_info["filename"] = filename
                 message_info["mimetype"] = content.info.mimetype
                 message_info["height"] = content.info.height
                 message_info["width"] = content.info.width
@@ -1587,6 +1668,12 @@ class GifMe(Plugin):
         offset = (page - 1) * per_page
         rows = await self.page_entries(q, per_page, offset)
         base = self._web_base()
+        live_providers = []
+        if self.config["use_media_proxy"]:
+            if (self.config["giphy_proxy"] or "").strip() and self.config["giphy_api_key"]:
+                live_providers.append("giphy")
+            if (self.config["klipy_proxy"] or "").strip() and self.config["klipy_api_key"]:
+                live_providers.append("klipy")
         cards = "".join(
             render_card_html(self._entry_view(r, token, base), widget) for r in rows
         )
@@ -1596,6 +1683,7 @@ class GifMe(Plugin):
                 total_pages=total_pages, cards_html=cards, widget=widget,
                 widget_id=req.query.get("widgetId", ""),
                 parent_url=req.query.get("parentUrl", ""),
+                live_providers=live_providers,
             ),
             content_type="text/html",
         )
@@ -1631,6 +1719,56 @@ class GifMe(Plugin):
             body=data, content_type=mime,
             headers={"Cache-Control": "private, max-age=86400"},
         )
+
+    async def _live_search_response(self, req: Request, provider: str) -> Response:
+        """Shared handler for the widget live-search endpoints (/search/<provider>).
+        Returns JSON {"results": [...]} where each entry carries a proxy mxc:// URL
+        (for sending) and a public CDN preview URL (for display in the widget)."""
+        if not self.config["web_enabled"]:
+            return json_response({"error": "disabled"}, status=404)
+        if not await self._req_session_user(req):
+            return json_response({"error": "unauthorized"}, status=401)
+        proxy = (self.config[f"{provider}_proxy"] or "").strip()
+        api_key = self.config[f"{provider}_api_key"]
+        if not (self.config["use_media_proxy"] and proxy and api_key):
+            return json_response({"error": "not enabled"}, status=404)
+        q = req.query.get("q", "") or ""
+        # filename drives auto-derived tags if a sent gif is later saved, so base
+        # it on the search query (matches the !gifme giphy/klipy save behavior)
+        qtag = self.sanistring(q) or "gif"
+        try:
+            if provider == "giphy":
+                cands = await self._search_giphy(q)
+                results = [{
+                    "mxc": f"mxc://{proxy}/{c['id']}",
+                    "preview": c["webp_url"],
+                    "w": c["width"], "h": c["height"], "size": c["webp_size"],
+                    "mime": "image/webp",
+                    "filename": f"{qtag}.webp",
+                    "msgtype": "image",
+                } for c in cands]
+            else:
+                cands = await self._search_klipy(q)
+                results = [{
+                    "mxc": f"mxc://{proxy}/{c['id']}",
+                    "preview": c["webp_url"],
+                    "w": c["width"], "h": c["height"], "size": c["size"],
+                    "mime": "image/webp",
+                    "filename": f"{qtag}.webp",
+                    "msgtype": "image",
+                } for c in cands]
+        except Exception as e:
+            self.log.warning("live %s search failed: %s", provider, e)
+            return json_response({"error": "search failed"}, status=502)
+        return json_response({"results": results})
+
+    @web.get("/search/giphy")
+    async def web_search_giphy(self, req: Request) -> Response:
+        return await self._live_search_response(req, "giphy")
+
+    @web.get("/search/klipy")
+    async def web_search_klipy(self, req: Request) -> Response:
+        return await self._live_search_response(req, "klipy")
 
     @web.get("/login")
     async def web_login(self, req: Request) -> Response:

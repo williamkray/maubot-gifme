@@ -17,6 +17,21 @@ fallback_threshold: 1
 giphy_api_key: ""
 klipy_api_key: ""
 
+## ─── gif media proxy ───────────────────────────────────────────────────────
+## Instead of downloading a gif and re-uploading it to your homeserver's media
+## repo (which costs disk forever), send giphy/klipy results as mxc:// URIs that
+## point at a "gifproxy" — a tiny Matrix media server that only redirects to the
+## provider's CDN. Nothing is stored on your homeserver. The 💾 SAVE action still
+## downloads + uploads, so saved archive entries remain permanent and self-hosted.
+## This also enables the Giphy/Klipy live-search tabs in the room widget.
+##
+## Defaults are the public instances run by the gifproxy author. To self-host
+## (recommended for reliability), see https://mau.dev/gomuks/gifproxy and point
+## these at your own domains.
+use_media_proxy: false
+giphy_proxy: giphy.mau.dev
+klipy_proxy: klipy.mau.dev
+
 ## DuckDuckGo image search (unofficial, no API key required — may break if DDG changes).
 ## force results to gif-typed images (type:gif filter). NOTE: biases toward GIFs but does
 ## not strictly guarantee the gif is animated.
