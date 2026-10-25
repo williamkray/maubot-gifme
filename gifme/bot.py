@@ -63,6 +63,7 @@ class Config(BaseProxyConfig):
         helper.copy("use_media_proxy")
         helper.copy("giphy_proxy")
         helper.copy("klipy_proxy")
+        helper.copy("fallback_result_pool")
         helper.copy("duckduckgo_force_gif")
         helper.copy("duckduckgo_size")
         helper.copy("duckduckgo_safesearch")
@@ -182,6 +183,17 @@ class GifMe(Plugin):
                 continue
         return out
 
+    def _pick_from_pool(self, candidates: list):
+        """Randomly pick from the top `fallback_result_pool` relevance-ranked
+        giphy/klipy candidates. The search helpers fetch a large page for the
+        widget; picking from all of it surfaces poorly-matching long-tail results."""
+        try:
+            pool = int(self.config["fallback_result_pool"])
+        except (TypeError, ValueError):
+            pool = 5
+        pool = max(1, min(pool, len(candidates)))
+        return random.choice(candidates[:pool])
+
     async def get_giphy(self, evt: MessageEvent, query: str) -> None:
         query = self.sanistring(query)
         try:
@@ -192,7 +204,7 @@ class GifMe(Plugin):
         if not candidates:
             await evt.reply("i couldn't find anything on Giphy for that, sorry.")
             return None
-        picked = random.choice(candidates)
+        picked = self._pick_from_pool(candidates)
 
         info = {
             "source": "giphy",
@@ -273,7 +285,7 @@ class GifMe(Plugin):
         if not candidates:
             await evt.reply("i couldn't find anything on Klipy for that, sorry.")
             return None
-        picked = random.choice(candidates)
+        picked = self._pick_from_pool(candidates)
 
         info = {
             "source": "klipy",
