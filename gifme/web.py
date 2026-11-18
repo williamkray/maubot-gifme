@@ -1,3 +1,4 @@
+import hashlib
 import html
 import json
 import urllib.parse
@@ -29,6 +30,7 @@ body {
   color: #e0e0e0;
   line-height: 1.5;
   min-height: 100dvh;
+  overflow-x: hidden;
 }
 
 a { color: #7aa2f7; text-decoration: none; }
@@ -43,6 +45,7 @@ a:hover { text-decoration: underline; }
   border-bottom: 1px solid #2d3561;
   padding: 10px 16px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
@@ -50,12 +53,14 @@ a:hover { text-decoration: underline; }
 .gifme-topbar form {
   display: flex;
   gap: 6px;
-  flex: 1;
+  flex: 1 1 240px;
+  min-width: 0;
   max-width: 640px;
 }
 
 .gifme-topbar input[type="text"] {
   flex: 1;
+  min-width: 0;
   background: #1a1a2e;
   border: 1px solid #2d3561;
   border-radius: 6px;
@@ -86,7 +91,7 @@ a:hover { text-decoration: underline; }
 /* gallery grid */
 .gifme-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr));
   gap: 12px;
   padding: 16px;
 }
@@ -105,6 +110,8 @@ a:hover { text-decoration: underline; }
 .gifme-card video {
   width: 100%;
   height: auto;
+  max-height: 60vh;
+  object-fit: contain;
   display: block;
   background: #0f3460;
 }
@@ -216,6 +223,34 @@ a:hover { text-decoration: underline; }
   padding: 16px;
   text-align: center;
 }
+#live-status:empty { display: none; }
+
+/* narrow layouts: mobile, and Matrix clients that open widgets in a tall side panel */
+@media (max-width: 560px) {
+  .gifme-topbar { padding: 8px; gap: 6px; }
+  .gifme-tabs { flex: 1 1 100%; }
+  .gifme-tab { flex: 1; padding: 6px 4px; text-align: center; }
+  .gifme-topbar form { flex-basis: 100%; max-width: none; }
+  .gifme-topbar button[type="submit"] { padding: 6px 10px; }
+
+  /* two columns of compact cards rather than one column of huge ones */
+  .gifme-grid {
+    grid-template-columns: repeat(auto-fill, minmax(min(130px, 100%), 1fr));
+    gap: 8px;
+    padding: 8px;
+  }
+  .gifme-card { border-radius: 8px; }
+  /* uniform tiles so mixed aspect ratios don't stretch rows into tall empty cards */
+  .gifme-card img,
+  .gifme-card video { aspect-ratio: 1; max-height: none; }
+  .gifme-quote { font-size: 0.82rem; padding: 8px 10px; }
+  .gifme-card .meta { padding: 6px 8px; font-size: 0.72rem; }
+  .gifme-card .meta .sub { font-size: 0.68rem; overflow-wrap: anywhere; }
+  .gifme-send { border-radius: 0 0 7px 7px; font-size: 0.8rem; padding: 8px 0; }
+
+  .pager { gap: 8px; padding: 12px 8px 20px; font-size: 0.8rem; }
+  .pager a { padding: 6px 10px; }
+}
 """
 
 
@@ -310,7 +345,9 @@ def render_gallery_html(
 
     # stylesheet link
     base_esc = html.escape(base)
-    stylesheet = f'<link rel="stylesheet" href="{base_esc}/style.css">'
+    # version the URL by content hash so CSS changes bypass the 1h Cache-Control
+    css_ver = hashlib.sha1(render_style_css().encode()).hexdigest()[:8]
+    stylesheet = f'<link rel="stylesheet" href="{base_esc}/style.css?v={css_ver}">'
 
     # search form. In widget mode we must carry widgetId + parentUrl through every
     # navigation (form submit, pager links) so the reloaded page's WidgetApi keeps the
